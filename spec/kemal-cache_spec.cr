@@ -67,6 +67,50 @@ describe Kemal::Cache do
   end
 
   describe Kemal::Cache::Handler do
+    it "caches successful responses by default" do
+      state = RequestState.new
+
+      mount_cache do
+        get "/default-status" do |env|
+          state.calls += 1
+          env.response.status_code = 204
+          ""
+        end
+      end
+
+      get "/default-status"
+      response.status_code.should eq 204
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+
+      get "/default-status"
+      response.status_code.should eq 204
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      state.calls.should eq 1
+    end
+
+    it "does not cache error responses by default" do
+      state = RequestState.new
+
+      mount_cache do
+        get "/default-errors" do |env|
+          state.calls += 1
+          env.response.status_code = 500
+          "error #{state.calls}"
+        end
+      end
+
+      get "/default-errors"
+      response.status_code.should eq 500
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "error 1"
+
+      get "/default-errors"
+      response.status_code.should eq 500
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "error 2"
+      state.calls.should eq 2
+    end
+
     it "uses a custom cache key generator when configured" do
       state = RequestState.new
       config = Kemal::Cache::Config.new(

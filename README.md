@@ -34,7 +34,7 @@ By default the middleware:
 
 - caches `GET` requests only
 - uses `context.request.resource` as the cache key
-- caches every response status code
+- caches successful `2xx` response status codes
 - stores responses for `10.minutes`
 - uses the in-process `Kemal::Cache::MemoryStore`
 - adds `X-Kemal-Cache: MISS` or `X-Kemal-Cache: HIT`
@@ -85,12 +85,22 @@ use Kemal::Cache::Handler.new(config)
 
 ### Custom status-code policy
 
-By default, `kemal-cache` preserves the current behavior and will store any response status code.
-Restrict it when you only want to persist successful or redirect responses:
+By default, `kemal-cache` stores successful `2xx` responses only.
+Override it when you want to persist a narrower or broader set of responses:
 
 ```crystal
 config = Kemal::Cache::Config.new(
   cacheable_status_codes: [200, 203, 301]
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+Pass `nil` to cache every response status code:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  cacheable_status_codes: nil
 )
 
 use Kemal::Cache::Handler.new(config)

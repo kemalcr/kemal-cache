@@ -1,5 +1,7 @@
 module Kemal::Cache
   class Config
+    DEFAULT_CACHEABLE_STATUS_CODES = (200..299).to_a
+
     property expires_in : Time::Span
     property store : Store
     property enabled : Bool
@@ -13,7 +15,7 @@ module Kemal::Cache
       @enabled : Bool = true,
       @key_generator : Proc(HTTP::Server::Context, String)? = nil,
       cacheable_methods : Array(String) = ["GET"],
-      cacheable_status_codes : Array(Int32)? = nil,
+      cacheable_status_codes : Array(Int32)? = DEFAULT_CACHEABLE_STATUS_CODES,
     )
       @cacheable_methods = cacheable_methods.map(&.upcase).uniq
       @cacheable_status_codes = cacheable_status_codes.try(&.uniq)
