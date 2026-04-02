@@ -139,7 +139,20 @@ use Kemal::Cache::Handler.new(config)
 
 ### Custom store
 
-Create a store by inheriting from `Kemal::Cache::Store`:
+`kemal-cache` includes a built-in `RedisStore` backed by
+[`jgaskins/redis`](https://github.com/jgaskins/redis):
+
+```crystal
+store = Kemal::Cache::RedisStore.new(
+  URI.parse("redis://localhost:6379/0"),
+  namespace: "my-app-cache"
+)
+
+config = Kemal::Cache::Config.new(store: store)
+use Kemal::Cache::Handler.new(config)
+```
+
+You can also build a custom store by inheriting from `Kemal::Cache::Store`:
 
 ```crystal
 class RedisStore < Kemal::Cache::Store

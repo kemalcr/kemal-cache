@@ -37,6 +37,68 @@ private class RecordingStore < Kemal::Cache::Store
   end
 end
 
+private struct FakeRedisEntry
+  getter value : String
+  getter expires_at : Time
+
+  def initialize(@value : String, ttl : Time::Span)
+    @expires_at = Time.utc + ttl
+  end
+
+  def expired?(now : Time = Time.utc) : Bool
+    @expires_at <= now
+  end
+end
+
+private class FakeRedisClient
+  include Kemal::Cache::RedisStore::Client
+
+  def initialize
+    @entries = {} of String => FakeRedisEntry
+  end
+
+  def get(key : String)
+    if entry = @entries[key]?
+      if entry.expired?
+        @entries.delete(key)
+        nil
+      else
+        entry.value
+      end
+    end
+  end
+
+  def set(key : String, value : String, *, ex : Time::Span, nx = false, xx = false, keepttl = false, get = false)
+    @entries[key] = FakeRedisEntry.new(value, ex)
+    "OK"
+  end
+
+  def del(*keys : String)
+    deleted = 0
+
+    keys.each do |key|
+      deleted += 1 if @entries.delete(key)
+    end
+
+    deleted.to_i64
+  end
+
+  def del(keys : Enumerable(String))
+    deleted = 0
+
+    keys.each do |key|
+      deleted += 1 if @entries.delete(key)
+    end
+
+    deleted.to_i64
+  end
+
+  def keys(pattern = "*")
+    prefix = pattern.ends_with?("*") ? pattern.rchop("*") : pattern
+    @entries.keys.select(&.starts_with?(prefix))
+  end
+end
+
 private def mount_cache(config : Kemal::Cache::Config = Kemal::Cache::Config.new, &)
   use Kemal::Cache::Handler.new(config)
   yield
@@ -59,6 +121,32 @@ describe Kemal::Cache do
       store.clear
       store.get("one").should be_nil
       store.get("two").should be_nil
+
+      store.set("short", "ttl", 5.milliseconds)
+      sleep 10.milliseconds
+      store.get("short").should be_nil
+    end
+  end
+
+  describe Kemal::Cache::RedisStore do
+    it "stores, deletes, clears, and expires values within its namespace" do
+      client = FakeRedisClient.new
+      store = Kemal::Cache::RedisStore.new(client, "spec-cache")
+
+      store.set("greeting", "hello", 20.milliseconds)
+      store.get("greeting").should eq("hello")
+
+      store.delete("greeting")
+      store.get("greeting").should be_nil
+
+      store.set("one", "1", 20.milliseconds)
+      store.set("two", "2", 20.milliseconds)
+      client.set("other-cache:keep", "3", ex: 20.milliseconds)
+      store.clear
+
+      store.get("one").should be_nil
+      store.get("two").should be_nil
+      client.get("other-cache:keep").should eq("3")
 
       store.set("short", "ttl", 5.milliseconds)
       sleep 10.milliseconds
