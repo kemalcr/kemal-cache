@@ -61,7 +61,7 @@ module Kemal::Cache
         body: body
       ).to_json
 
-      if response_cacheable?(context)
+      if response_cacheable?(context, capture_output, body)
         @config.store.set(key, payload, @config.expires_in)
       end
 
@@ -98,10 +98,12 @@ module Kemal::Cache
         normalized == HEADER_NAME.downcase
     end
 
-    private def response_cacheable?(context : HTTP::Server::Context) : Bool
+    private def response_cacheable?(context : HTTP::Server::Context, capture_output : CaptureIO, body : String) : Bool
       response = context.response
 
       @config.cacheable_status_code?(response.status_code) &&
+        @config.body_within_limit?(body.bytesize) &&
+        (@config.cache_streaming || !capture_output.flushed) &&
         !header_present?(response.headers, "set-cookie") &&
         !vary_star?(response.headers) &&
         !cache_control_disallows_storage?(response.headers) &&
@@ -143,6 +145,12 @@ module Kemal::Cache
     end
 
     private class CaptureIO < IO::Memory
+      getter flushed = false
+
+      def flush : Nil
+        @flushed = true
+      end
+
       def close : Nil
       end
 

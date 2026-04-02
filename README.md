@@ -37,6 +37,8 @@ By default the middleware:
 - uses `context.request.resource` as the cache key
 - caches successful `2xx` response status codes
 - skips storing responses with `Set-Cookie`, `Cache-Control: no-store/no-cache/private`, or `Vary: *`
+- skips storing responses larger than `1_048_576` bytes
+- skips storing responses that call `flush`
 - stores responses for `10.minutes`
 - uses the in-process `Kemal::Cache::MemoryStore`
 - adds `X-Kemal-Cache: MISS` or `X-Kemal-Cache: HIT`
@@ -53,6 +55,8 @@ config = Kemal::Cache::Config.new(
   enabled: true,
   cacheable_methods: ["GET"],
   cacheable_status_codes: [200, 202],
+  max_body_bytes: 128_000,
+  cache_streaming: false,
   skip_if: ->(context : HTTP::Server::Context) { context.request.path.starts_with?("/admin") },
   should_cache: ->(context : HTTP::Server::Context) { context.response.status_code == 202 }
 )
@@ -105,6 +109,41 @@ Pass `nil` to cache every response status code:
 ```crystal
 config = Kemal::Cache::Config.new(
   cacheable_status_codes: nil
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+### Response size and streaming guards
+
+By default, `kemal-cache` only persists responses up to `1_048_576` bytes and skips
+responses that call `flush`.
+
+Adjust or disable the size limit with `max_body_bytes`:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  max_body_bytes: 128_000
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+Pass `nil` to remove the size limit:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  max_body_bytes: nil
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+Opt in to caching responses that flush their output:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  cache_streaming: true
 )
 
 use Kemal::Cache::Handler.new(config)

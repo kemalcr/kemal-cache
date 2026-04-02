@@ -1,6 +1,7 @@
 module Kemal::Cache
   class Config
     DEFAULT_CACHEABLE_STATUS_CODES = (200..299).to_a
+    DEFAULT_MAX_BODY_BYTES         = 1_048_576
 
     property expires_in : Time::Span
     property store : Store
@@ -8,6 +9,8 @@ module Kemal::Cache
     property key_generator : Proc(HTTP::Server::Context, String)?
     property skip_if : Proc(HTTP::Server::Context, Bool)?
     property should_cache : Proc(HTTP::Server::Context, Bool)?
+    property max_body_bytes : Int32?
+    property cache_streaming : Bool
     getter cacheable_methods : Array(String)
     getter cacheable_status_codes : Array(Int32)?
 
@@ -18,6 +21,8 @@ module Kemal::Cache
       @key_generator : Proc(HTTP::Server::Context, String)? = nil,
       @skip_if : Proc(HTTP::Server::Context, Bool)? = nil,
       @should_cache : Proc(HTTP::Server::Context, Bool)? = nil,
+      @max_body_bytes : Int32? = DEFAULT_MAX_BODY_BYTES,
+      @cache_streaming : Bool = false,
       cacheable_methods : Array(String) = ["GET"],
       cacheable_status_codes : Array(Int32)? = DEFAULT_CACHEABLE_STATUS_CODES,
     )
@@ -71,6 +76,10 @@ module Kemal::Cache
 
     def should_cache?(context : HTTP::Server::Context) : Bool
       @should_cache.try(&.call(context)) != false
+    end
+
+    def body_within_limit?(bytesize : Int32) : Bool
+      @max_body_bytes.try { |limit| bytesize <= limit } != false
     end
   end
 end

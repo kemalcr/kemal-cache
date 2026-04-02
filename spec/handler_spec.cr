@@ -313,6 +313,80 @@ describe Kemal::Cache::Handler do
     state.calls.should eq 2
   end
 
+  it "does not persist responses larger than the configured body limit" do
+    store = RecordingStore.new
+    state = RequestState.new
+    config = Kemal::Cache::Config.new(
+      store: store,
+      max_body_bytes: 5
+    )
+
+    mount_cache(config) do
+      get "/large-body" do
+        state.calls += 1
+        "body-#{state.calls}"
+      end
+    end
+
+    get "/large-body"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "body-1"
+
+    get "/large-body"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "body-2"
+    state.calls.should eq 2
+    store.last_key.should be_nil
+  end
+
+  it "does not persist streaming responses by default" do
+    store = RecordingStore.new
+    state = RequestState.new
+    config = Kemal::Cache::Config.new(store: store)
+
+    mount_cache(config) do
+      get "/streaming" do |env|
+        state.calls += 1
+        env.response.print "chunk-#{state.calls}"
+        env.response.flush
+        "-tail"
+      end
+    end
+
+    get "/streaming"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "chunk-1-tail"
+
+    get "/streaming"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "chunk-2-tail"
+    state.calls.should eq 2
+    store.last_key.should be_nil
+  end
+
+  it "can cache streaming responses when explicitly enabled" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new(cache_streaming: true)
+
+    mount_cache(config) do
+      get "/streaming-enabled" do |env|
+        state.calls += 1
+        env.response.print "stream-#{state.calls}"
+        env.response.flush
+        "-done"
+      end
+    end
+
+    get "/streaming-enabled"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "stream-1-done"
+
+    get "/streaming-enabled"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq "stream-1-done"
+    state.calls.should eq 1
+  end
+
   it "uses the full request resource including query params as the cache key" do
     state = RequestState.new
 
