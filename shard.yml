@@ -4,6 +4,14 @@ version: 0.1.0
 authors:
   - Serdar Dogruyol <dogruyolserdar@gmail.com>
 
+dependencies:
+  kemal:
+    github: kemalcr/kemal
+
+development_dependencies:
+  spec-kemal:
+    github: kemalcr/spec-kemal
+
 crystal: '>= 1.19.1'
 
 license: MIT
