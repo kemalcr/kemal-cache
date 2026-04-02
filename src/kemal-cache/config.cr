@@ -6,6 +6,8 @@ module Kemal::Cache
     property store : Store
     property enabled : Bool
     property key_generator : Proc(HTTP::Server::Context, String)?
+    property skip_if : Proc(HTTP::Server::Context, Bool)?
+    property should_cache : Proc(HTTP::Server::Context, Bool)?
     getter cacheable_methods : Array(String)
     getter cacheable_status_codes : Array(Int32)?
 
@@ -14,6 +16,8 @@ module Kemal::Cache
       @store : Store = MemoryStore.new,
       @enabled : Bool = true,
       @key_generator : Proc(HTTP::Server::Context, String)? = nil,
+      @skip_if : Proc(HTTP::Server::Context, Bool)? = nil,
+      @should_cache : Proc(HTTP::Server::Context, Bool)? = nil,
       cacheable_methods : Array(String) = ["GET"],
       cacheable_status_codes : Array(Int32)? = DEFAULT_CACHEABLE_STATUS_CODES,
     )
@@ -47,6 +51,14 @@ module Kemal::Cache
 
     def cacheable_status_code?(status_code : Int32) : Bool
       @cacheable_status_codes.try(&.includes?(status_code)) != false
+    end
+
+    def skip?(context : HTTP::Server::Context) : Bool
+      @skip_if.try(&.call(context)) || false
+    end
+
+    def should_cache?(context : HTTP::Server::Context) : Bool
+      @should_cache.try(&.call(context)) != false
     end
   end
 end

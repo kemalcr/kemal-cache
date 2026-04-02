@@ -23,6 +23,7 @@ module Kemal::Cache
 
     private def request_cacheable?(context : HTTP::Server::Context) : Bool
       @config.cacheable_method?(context.request.method) &&
+        !@config.skip?(context) &&
         !header_present?(context.request.headers, "authorization") &&
         !header_present?(context.request.headers, "cookie")
     end
@@ -60,7 +61,7 @@ module Kemal::Cache
         body: body
       ).to_json
 
-      if response_cacheable?(context.response)
+      if response_cacheable?(context)
         @config.store.set(key, payload, @config.expires_in)
       end
 
@@ -97,11 +98,14 @@ module Kemal::Cache
         normalized == HEADER_NAME.downcase
     end
 
-    private def response_cacheable?(response : HTTP::Server::Response) : Bool
+    private def response_cacheable?(context : HTTP::Server::Context) : Bool
+      response = context.response
+
       @config.cacheable_status_code?(response.status_code) &&
         !header_present?(response.headers, "set-cookie") &&
         !vary_star?(response.headers) &&
-        !cache_control_disallows_storage?(response.headers)
+        !cache_control_disallows_storage?(response.headers) &&
+        @config.should_cache?(context)
     end
 
     private def header_present?(headers : HTTP::Headers, target_name : String) : Bool

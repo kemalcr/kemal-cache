@@ -220,6 +220,72 @@ describe Kemal::Cache do
       state.calls.should eq 2
     end
 
+    it "supports custom skip_if rules" do
+      state = RequestState.new
+      config = Kemal::Cache::Config.new(
+        skip_if: ->(context : HTTP::Server::Context) do
+          context.request.query_params["preview"]? == "true"
+        end
+      )
+
+      mount_cache(config) do
+        get "/skip-if" do
+          state.calls += 1
+          "skip #{state.calls}"
+        end
+      end
+
+      get "/skip-if"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "skip 1"
+
+      get "/skip-if"
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "skip 1"
+
+      get "/skip-if?preview=true"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "skip 2"
+
+      get "/skip-if?preview=true"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "skip 3"
+      state.calls.should eq 3
+    end
+
+    it "supports custom should_cache rules" do
+      state = RequestState.new
+      config = Kemal::Cache::Config.new(
+        should_cache: ->(context : HTTP::Server::Context) do
+          context.response.status_code == 202
+        end
+      )
+
+      mount_cache(config) do
+        get "/should-cache" do |env|
+          state.calls += 1
+          env.response.status_code = state.calls == 1 ? 200 : 202
+          "should #{state.calls}"
+        end
+      end
+
+      get "/should-cache"
+      response.status_code.should eq 200
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "should 1"
+
+      get "/should-cache"
+      response.status_code.should eq 202
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "should 2"
+
+      get "/should-cache"
+      response.status_code.should eq 202
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "should 2"
+      state.calls.should eq 2
+    end
+
     it "uses the full request resource including query params as the cache key" do
       state = RequestState.new
 

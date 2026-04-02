@@ -52,7 +52,9 @@ config = Kemal::Cache::Config.new(
   store: store,
   enabled: true,
   cacheable_methods: ["GET"],
-  cacheable_status_codes: [200, 202]
+  cacheable_status_codes: [200, 202],
+  skip_if: ->(context : HTTP::Server::Context) { context.request.path.starts_with?("/admin") },
+  should_cache: ->(context : HTTP::Server::Context) { context.response.status_code == 202 }
 )
 
 use Kemal::Cache::Handler.new(config)
@@ -103,6 +105,33 @@ Pass `nil` to cache every response status code:
 ```crystal
 config = Kemal::Cache::Config.new(
   cacheable_status_codes: nil
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+### Custom cache filters
+
+Use `skip_if` to bypass cache lookup and storage for matching requests:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  skip_if: ->(context : HTTP::Server::Context) do
+    context.request.query_params["preview"]? == "true"
+  end
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+Use `should_cache` to make the final storage decision after the response has been built.
+It complements the built-in safety checks and can inspect `context.response`:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  should_cache: ->(context : HTTP::Server::Context) do
+    context.response.status_code == 202
+  end
 )
 
 use Kemal::Cache::Handler.new(config)
