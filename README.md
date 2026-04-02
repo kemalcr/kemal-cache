@@ -1,7 +1,7 @@
 # kemal-cache
 
 `kemal-cache` is a lightweight response caching middleware for [Kemal](https://kemalcr.com/).
-It is designed to feel native to the `kemalcr` ecosystem: small API surface, storage-agnostic,
+It is designed to feel native to the `Kemal` ecosystem: small API surface, storage-agnostic,
 and safe to use in Crystal's multi-threaded runtime.
 
 ## Installation
@@ -10,8 +10,6 @@ and safe to use in Crystal's multi-threaded runtime.
 
    ```yaml
    dependencies:
-     kemal:
-       github: kemalcr/kemal
      kemal-cache:
        github: kemalcr/kemal-cache
    ```
@@ -23,7 +21,7 @@ and safe to use in Crystal's multi-threaded runtime.
 ```crystal
 require "kemal-cache"
 
-add_handler Kemal::Cache::Handler.new
+use Kemal::Cache::Handler.new
 
 get "/articles" do
   "Expensive response"
@@ -52,7 +50,7 @@ config = Kemal::Cache::Config.new(
   enabled: true
 )
 
-add_handler Kemal::Cache::Handler.new(config)
+use Kemal::Cache::Handler.new(config)
 ```
 
 ### Custom store
@@ -83,7 +81,7 @@ Then wire it into the config:
 
 ```crystal
 config = Kemal::Cache::Config.new(store: RedisStore.new)
-add_handler Kemal::Cache::Handler.new(config)
+use Kemal::Cache::Handler.new(config)
 ```
 
 ## How It Works
