@@ -21,11 +21,11 @@ module Kemal::Cache
     end
 
     private def cacheable?(context : HTTP::Server::Context) : Bool
-      @config.enabled && context.request.method == "GET"
+      @config.cacheable_method?(context.request.method)
     end
 
     private def cache_key(context : HTTP::Server::Context) : String
-      context.request.resource
+      @config.cache_key(context)
     end
 
     private def bypass(context : HTTP::Server::Context) : Nil
@@ -57,7 +57,9 @@ module Kemal::Cache
         body: body
       ).to_json
 
-      @config.store.set(key, payload, @config.expires_in)
+      if @config.cacheable_status_code?(context.response.status_code)
+        @config.store.set(key, payload, @config.expires_in)
+      end
 
       context.response.output = original_output
       context.response.headers[HEADER_NAME] = "MISS"

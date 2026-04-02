@@ -67,6 +67,29 @@ describe Kemal::Cache do
   end
 
   describe Kemal::Cache::Handler do
+    it "uses a custom cache key generator when configured" do
+      state = RequestState.new
+      config = Kemal::Cache::Config.new(
+        key_generator: ->(context : HTTP::Server::Context) { context.request.path }
+      )
+
+      mount_cache(config) do
+        get "/custom-key" do
+          state.calls += 1
+          "page #{state.calls}"
+        end
+      end
+
+      get "/custom-key?page=1"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "page 1"
+
+      get "/custom-key?page=2"
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "page 1"
+      state.calls.should eq 1
+    end
+
     it "returns MISS first and HIT on the next GET request" do
       state = RequestState.new
 
@@ -141,6 +164,27 @@ describe Kemal::Cache do
       state.calls.should eq 2
     end
 
+    it "caches configured HTTP methods" do
+      state = RequestState.new
+      config = Kemal::Cache::Config.new(cacheable_methods: ["GET", "POST"])
+
+      mount_cache(config) do
+        post "/cached-posts" do
+          state.calls += 1
+          "post #{state.calls}"
+        end
+      end
+
+      post "/cached-posts"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "post 1"
+
+      post "/cached-posts"
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "post 1"
+      state.calls.should eq 1
+    end
+
     it "respects the enabled flag" do
       config = Kemal::Cache::Config.new(enabled: false)
       state = RequestState.new
@@ -186,6 +230,35 @@ describe Kemal::Cache do
       state.calls.should eq 2
     end
 
+    it "caches only responses with allowed status codes" do
+      state = RequestState.new
+      config = Kemal::Cache::Config.new(cacheable_status_codes: [202])
+
+      mount_cache(config) do
+        get "/status" do |env|
+          state.calls += 1
+          env.response.status_code = state.calls == 1 ? 500 : 202
+          "status #{state.calls}"
+        end
+      end
+
+      get "/status"
+      response.status_code.should eq 500
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "status 1"
+
+      get "/status"
+      response.status_code.should eq 202
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "status 2"
+
+      get "/status"
+      response.status_code.should eq 202
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "status 2"
+      state.calls.should eq 2
+    end
+
     it "passes the request resource and configured ttl to the store" do
       store = RecordingStore.new
       config = Kemal::Cache::Config.new(expires_in: 15.seconds, store: store)
@@ -202,6 +275,26 @@ describe Kemal::Cache do
       store.last_key.should eq "/tracked?page=2"
       store.last_ttl.should eq 15.seconds
       store.last_value.should_not be_nil
+    end
+
+    it "does not persist disallowed status codes" do
+      store = RecordingStore.new
+      config = Kemal::Cache::Config.new(
+        store: store,
+        cacheable_status_codes: [200]
+      )
+
+      mount_cache(config) do
+        get "/errors" do |env|
+          env.response.status_code = 500
+          "error"
+        end
+      end
+
+      get "/errors"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      store.last_key.should be_nil
+      store.last_value.should be_nil
     end
   end
 end

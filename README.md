@@ -34,6 +34,7 @@ By default the middleware:
 
 - caches `GET` requests only
 - uses `context.request.resource` as the cache key
+- caches every response status code
 - stores responses for `10.minutes`
 - uses the in-process `Kemal::Cache::MemoryStore`
 - adds `X-Kemal-Cache: MISS` or `X-Kemal-Cache: HIT`
@@ -47,7 +48,49 @@ store = Kemal::Cache::MemoryStore.new
 config = Kemal::Cache::Config.new(
   expires_in: 2.minutes,
   store: store,
-  enabled: true
+  enabled: true,
+  cacheable_methods: ["GET"],
+  cacheable_status_codes: [200, 202]
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+### Custom cache key generation
+
+Use `key_generator` when the default `request.resource` key is too granular or not granular enough:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  key_generator: ->(context : HTTP::Server::Context) do
+    locale = context.request.headers["Accept-Language"]? || "default"
+    "#{context.request.path}:#{locale}"
+  end
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+### Custom cacheable methods
+
+By default, only `GET` responses are cached. You can opt in to other methods:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  cacheable_methods: ["GET", "POST"]
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+### Custom status-code policy
+
+By default, `kemal-cache` preserves the current behavior and will store any response status code.
+Restrict it when you only want to persist successful or redirect responses:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  cacheable_status_codes: [200, 203, 301]
 )
 
 use Kemal::Cache::Handler.new(config)
