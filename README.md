@@ -137,6 +137,32 @@ config = Kemal::Cache::Config.new(
 use Kemal::Cache::Handler.new(config)
 ```
 
+### Cache invalidation
+
+Use `invalidate` to remove a specific cached entry by its exact key:
+
+```crystal
+config = Kemal::Cache::Config.new
+
+config.invalidate("/articles?page=2")
+```
+
+If you are invalidating from inside a Kemal route and your cache key depends on the
+current `HTTP::Server::Context`, pass the context directly:
+
+```crystal
+post "/articles/cache/invalidate" do |env|
+  config.invalidate(env)
+  env.response.status_code = 204
+end
+```
+
+Use `clear_cache` to purge the configured store:
+
+```crystal
+config.clear_cache
+```
+
 ### Custom store
 
 `kemal-cache` includes a built-in `RedisStore` backed by

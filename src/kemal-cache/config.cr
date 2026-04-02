@@ -45,6 +45,18 @@ module Kemal::Cache
       @key_generator.try(&.call(context)) || context.request.resource
     end
 
+    def invalidate(key : String) : Nil
+      @store.delete(key)
+    end
+
+    def invalidate(context : HTTP::Server::Context) : Nil
+      invalidate(cache_key(context))
+    end
+
+    def clear_cache : Nil
+      @store.clear
+    end
+
     def cacheable_method?(method : String) : Bool
       @enabled && @cacheable_methods.includes?(method.upcase)
     end

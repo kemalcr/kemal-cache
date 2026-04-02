@@ -220,6 +220,99 @@ describe Kemal::Cache::Handler do
     state.calls.should eq 2
   end
 
+  it "invalidates cached entries by explicit key" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new
+
+    mount_cache(config) do
+      get "/invalidate-key" do
+        state.calls += 1
+        "key #{state.calls}"
+      end
+    end
+
+    get "/invalidate-key"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "key 1"
+
+    get "/invalidate-key"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq "key 1"
+
+    config.invalidate("/invalidate-key")
+
+    get "/invalidate-key"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "key 2"
+    state.calls.should eq 2
+  end
+
+  it "invalidates cached entries from the current context" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new(
+      key_generator: ->(context : HTTP::Server::Context) { context.request.path },
+      skip_if: ->(context : HTTP::Server::Context) do
+        context.request.query_params["invalidate"]? == "true"
+      end
+    )
+
+    mount_cache(config) do
+      get "/invalidate-context" do |env|
+        if env.request.query_params["invalidate"]? == "true"
+          config.invalidate(env)
+          "invalidated"
+        else
+          state.calls += 1
+          "context #{state.calls}"
+        end
+      end
+    end
+
+    get "/invalidate-context"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "context 1"
+
+    get "/invalidate-context"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq "context 1"
+
+    get "/invalidate-context?invalidate=true"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "invalidated"
+
+    get "/invalidate-context"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "context 2"
+    state.calls.should eq 2
+  end
+
+  it "clears all cached entries through the config" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new
+
+    mount_cache(config) do
+      get "/clear-cache" do
+        state.calls += 1
+        "clear #{state.calls}"
+      end
+    end
+
+    get "/clear-cache"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "clear 1"
+
+    get "/clear-cache"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq "clear 1"
+
+    config.clear_cache
+
+    get "/clear-cache"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "clear 2"
+    state.calls.should eq 2
+  end
+
   it "uses the full request resource including query params as the cache key" do
     state = RequestState.new
 
