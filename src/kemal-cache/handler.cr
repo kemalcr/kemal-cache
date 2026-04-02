@@ -1,6 +1,7 @@
 module Kemal::Cache
   class Handler < Kemal::Handler
-    HEADER_NAME = "X-Kemal-Cache"
+    HEADER_NAME                      = "X-Kemal-Cache"
+    PRIVATE_CACHE_CONTROL_DIRECTIVES = {"no-cache", "no-store", "private"}
 
     getter config : Config
 
@@ -8,7 +9,7 @@ module Kemal::Cache
     end
 
     def call(context : HTTP::Server::Context)
-      return bypass(context) unless cacheable?(context)
+      return bypass(context) unless request_cacheable?(context)
 
       key = cache_key(context)
 
@@ -20,8 +21,10 @@ module Kemal::Cache
       write_miss(context, key)
     end
 
-    private def cacheable?(context : HTTP::Server::Context) : Bool
-      @config.cacheable_method?(context.request.method)
+    private def request_cacheable?(context : HTTP::Server::Context) : Bool
+      @config.cacheable_method?(context.request.method) &&
+        !header_present?(context.request.headers, "authorization") &&
+        !header_present?(context.request.headers, "cookie")
     end
 
     private def cache_key(context : HTTP::Server::Context) : String
@@ -57,7 +60,7 @@ module Kemal::Cache
         body: body
       ).to_json
 
-      if @config.cacheable_status_code?(context.response.status_code)
+      if response_cacheable?(context.response)
         @config.store.set(key, payload, @config.expires_in)
       end
 
@@ -92,6 +95,47 @@ module Kemal::Cache
       normalized == "content-length" ||
         normalized == "transfer-encoding" ||
         normalized == HEADER_NAME.downcase
+    end
+
+    private def response_cacheable?(response : HTTP::Server::Response) : Bool
+      @config.cacheable_status_code?(response.status_code) &&
+        !header_present?(response.headers, "set-cookie") &&
+        !vary_star?(response.headers) &&
+        !cache_control_disallows_storage?(response.headers)
+    end
+
+    private def header_present?(headers : HTTP::Headers, target_name : String) : Bool
+      headers.each do |name, values|
+        return true if name.downcase == target_name && !values.empty?
+      end
+
+      false
+    end
+
+    private def vary_star?(headers : HTTP::Headers) : Bool
+      header_tokens(headers, "vary").includes?("*")
+    end
+
+    private def cache_control_disallows_storage?(headers : HTTP::Headers) : Bool
+      header_tokens(headers, "cache-control").any? do |directive|
+        PRIVATE_CACHE_CONTROL_DIRECTIVES.includes?(directive.split('=', 2).first)
+      end
+    end
+
+    private def header_tokens(headers : HTTP::Headers, target_name : String) : Array(String)
+      tokens = [] of String
+
+      headers.each do |name, values|
+        next unless name.downcase == target_name
+
+        values.each do |value|
+          value.split(',').each do |token|
+            tokens << token.strip.downcase
+          end
+        end
+      end
+
+      tokens
     end
 
     private class CaptureIO < IO::Memory

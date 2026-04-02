@@ -164,6 +164,62 @@ describe Kemal::Cache do
       state.calls.should eq 1
     end
 
+    it "bypasses cache when the request has an Authorization header" do
+      state = RequestState.new
+
+      mount_cache do
+        get "/authorized" do
+          state.calls += 1
+          "authorized #{state.calls}"
+        end
+      end
+
+      get "/authorized"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "authorized 1"
+
+      get "/authorized"
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "authorized 1"
+
+      get "/authorized", headers: HTTP::Headers{"Authorization" => "Bearer token"}
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "authorized 2"
+
+      get "/authorized"
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "authorized 1"
+      state.calls.should eq 2
+    end
+
+    it "bypasses cache when the request has a Cookie header" do
+      state = RequestState.new
+
+      mount_cache do
+        get "/cookies" do
+          state.calls += 1
+          "cookies #{state.calls}"
+        end
+      end
+
+      get "/cookies"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "cookies 1"
+
+      get "/cookies"
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "cookies 1"
+
+      get "/cookies", headers: HTTP::Headers{"Cookie" => "session=abc123"}
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "cookies 2"
+
+      get "/cookies"
+      response.headers["X-Kemal-Cache"].should eq "HIT"
+      response.body.should eq "cookies 1"
+      state.calls.should eq 2
+    end
+
     it "uses the full request resource including query params as the cache key" do
       state = RequestState.new
 
@@ -339,6 +395,107 @@ describe Kemal::Cache do
       response.headers["X-Kemal-Cache"].should eq "MISS"
       store.last_key.should be_nil
       store.last_value.should be_nil
+    end
+
+    it "does not persist responses that set cookies" do
+      store = RecordingStore.new
+      state = RequestState.new
+      config = Kemal::Cache::Config.new(store: store)
+
+      mount_cache(config) do
+        get "/set-cookie" do |env|
+          state.calls += 1
+          env.response.headers.add("Set-Cookie", "session=#{state.calls}; Path=/; HttpOnly")
+          "cookie #{state.calls}"
+        end
+      end
+
+      get "/set-cookie"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "cookie 1"
+
+      get "/set-cookie"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "cookie 2"
+      state.calls.should eq 2
+      store.last_key.should be_nil
+    end
+
+    it "does not persist responses with cache-control directives that disallow storage" do
+      store = RecordingStore.new
+      state = RequestState.new
+      config = Kemal::Cache::Config.new(store: store)
+
+      mount_cache(config) do
+        get "/no-store" do |env|
+          state.calls += 1
+          env.response.headers["Cache-Control"] = "no-store, max-age=60"
+          "no-store #{state.calls}"
+        end
+
+        get "/no-cache" do |env|
+          state.calls += 1
+          env.response.headers["Cache-Control"] = "no-cache"
+          "no-cache #{state.calls}"
+        end
+
+        get "/private-cache" do |env|
+          state.calls += 1
+          env.response.headers["Cache-Control"] = "private"
+          "private #{state.calls}"
+        end
+      end
+
+      get "/no-store"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "no-store 1"
+
+      get "/no-store"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "no-store 2"
+
+      get "/no-cache"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "no-cache 3"
+
+      get "/no-cache"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "no-cache 4"
+
+      get "/private-cache"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "private 5"
+
+      get "/private-cache"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "private 6"
+
+      state.calls.should eq 6
+      store.last_key.should be_nil
+    end
+
+    it "does not persist responses with Vary: *" do
+      store = RecordingStore.new
+      state = RequestState.new
+      config = Kemal::Cache::Config.new(store: store)
+
+      mount_cache(config) do
+        get "/vary-star" do |env|
+          state.calls += 1
+          env.response.headers["Vary"] = "*"
+          "vary #{state.calls}"
+        end
+      end
+
+      get "/vary-star"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "vary 1"
+
+      get "/vary-star"
+      response.headers["X-Kemal-Cache"].should eq "MISS"
+      response.body.should eq "vary 2"
+      state.calls.should eq 2
+      store.last_key.should be_nil
     end
   end
 end

@@ -33,8 +33,10 @@ Kemal.run
 By default the middleware:
 
 - caches `GET` requests only
+- bypasses cache for requests with `Authorization` or `Cookie` headers
 - uses `context.request.resource` as the cache key
 - caches successful `2xx` response status codes
+- skips storing responses with `Set-Cookie`, `Cache-Control: no-store/no-cache/private`, or `Vary: *`
 - stores responses for `10.minutes`
 - uses the in-process `Kemal::Cache::MemoryStore`
 - adds `X-Kemal-Cache: MISS` or `X-Kemal-Cache: HIT`
@@ -146,6 +148,9 @@ without invoking the rest of the handler chain.
 The default `MemoryStore` is protected by a `Mutex`, making it safe for Kemal applications
 running in MT mode. Because it is process-local, it is best suited to single-instance deployments
 or development environments.
+
+For safer defaults, the middleware bypasses caching for authenticated or cookie-bearing requests,
+and it will not persist responses that explicitly opt out of storage or set cookies.
 
 ## Development
 
