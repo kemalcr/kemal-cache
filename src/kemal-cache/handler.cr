@@ -40,9 +40,15 @@ module Kemal::Cache
     private def write_hit(context : HTTP::Server::Context, payload : String) : Nil
       cached_response = CachedResponse.from_json(payload)
 
-      context.response.status_code = cached_response.status_code
       context.response.headers.clear
       restore_headers(context.response.headers, cached_response.headers)
+      if not_modified?(context.request, cached_response.headers)
+        context.response.status_code = 304
+        context.response.headers[HEADER_NAME] = "HIT"
+        return
+      end
+
+      context.response.status_code = cached_response.status_code
       context.response.headers[HEADER_NAME] = "HIT"
       context.response.print cached_response.body
     end
@@ -55,13 +61,15 @@ module Kemal::Cache
       call_next(context)
 
       body = capture_output.to_s
+      should_store = storable_response?(context, capture_output, body)
+      ensure_cache_validators(context.response, body) if should_store
       payload = CachedResponse.new(
         status_code: context.response.status_code,
         headers: snapshot_headers(context.response.headers),
         body: body
       ).to_json
 
-      if response_cacheable?(context, capture_output, body)
+      if should_store
         @config.store.set(key, payload, @config.expires_in)
       end
 
@@ -98,7 +106,7 @@ module Kemal::Cache
         normalized == HEADER_NAME.downcase
     end
 
-    private def response_cacheable?(context : HTTP::Server::Context, capture_output : CaptureIO, body : String) : Bool
+    private def storable_response?(context : HTTP::Server::Context, capture_output : CaptureIO, body : String) : Bool
       response = context.response
 
       @config.cacheable_status_code?(response.status_code) &&
@@ -110,12 +118,50 @@ module Kemal::Cache
         @config.should_cache?(context)
     end
 
+    private def ensure_cache_validators(response : HTTP::Server::Response, body : String) : Nil
+      unless header_present?(response.headers, "etag") || !@config.auto_etag
+        response.headers["ETag"] = %{W/"#{Digest::SHA256.hexdigest(body)}"}
+      end
+
+      unless header_present?(response.headers, "last-modified") || !@config.auto_last_modified
+        response.headers["Last-Modified"] = HTTP.format_time(Time.utc)
+      end
+    end
+
+    private def not_modified?(request : HTTP::Request, cached_headers : Hash(String, Array(String))) : Bool
+      return false unless @config.conditional_get
+
+      if if_none_match = request.if_none_match
+        etag = header_value(cached_headers, "etag")
+        return false unless etag
+
+        if_none_match.any? { |candidate| candidate == "*" || candidate == etag }
+      elsif if_modified_since = request.headers["If-Modified-Since"]?
+        last_modified = header_value(cached_headers, "last-modified")
+        return false unless last_modified
+
+        header_time = HTTP.parse_time(if_modified_since)
+        last_modified_time = HTTP.parse_time(last_modified)
+        !!(header_time && last_modified_time && last_modified_time <= header_time + 1.second)
+      else
+        false
+      end
+    end
+
     private def header_present?(headers : HTTP::Headers, target_name : String) : Bool
       headers.each do |name, values|
         return true if name.downcase == target_name && !values.empty?
       end
 
       false
+    end
+
+    private def header_value(headers : Hash(String, Array(String)), target_name : String) : String?
+      headers.each do |name, values|
+        return values.first? if name.downcase == target_name && !values.empty?
+      end
+
+      nil
     end
 
     private def vary_star?(headers : HTTP::Headers) : Bool

@@ -11,6 +11,9 @@ module Kemal::Cache
     property should_cache : Proc(HTTP::Server::Context, Bool)?
     property max_body_bytes : Int32?
     property cache_streaming : Bool
+    property auto_etag : Bool
+    property auto_last_modified : Bool
+    property conditional_get : Bool
     getter cacheable_methods : Array(String)
     getter cacheable_status_codes : Array(Int32)?
 
@@ -23,6 +26,9 @@ module Kemal::Cache
       @should_cache : Proc(HTTP::Server::Context, Bool)? = nil,
       @max_body_bytes : Int32? = DEFAULT_MAX_BODY_BYTES,
       @cache_streaming : Bool = false,
+      @auto_etag : Bool = true,
+      @auto_last_modified : Bool = true,
+      @conditional_get : Bool = true,
       cacheable_methods : Array(String) = ["GET"],
       cacheable_status_codes : Array(Int32)? = DEFAULT_CACHEABLE_STATUS_CODES,
     )

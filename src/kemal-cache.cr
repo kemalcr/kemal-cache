@@ -1,4 +1,5 @@
 require "kemal"
+require "digest/sha256"
 require "redis"
 require "./kemal-cache/store"
 require "./kemal-cache/cache_entry"

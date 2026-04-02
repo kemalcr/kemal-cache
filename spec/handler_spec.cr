@@ -387,6 +387,97 @@ describe Kemal::Cache::Handler do
     state.calls.should eq 1
   end
 
+  it "adds ETag and Last-Modified headers to cached responses" do
+    state = RequestState.new
+
+    mount_cache do
+      get "/validators" do
+        state.calls += 1
+        "validators #{state.calls}"
+      end
+    end
+
+    get "/validators"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.headers["ETag"]?.should_not be_nil
+    response.headers["Last-Modified"]?.should_not be_nil
+
+    etag = response.headers["ETag"]
+    last_modified = response.headers["Last-Modified"]
+
+    get "/validators"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.headers["ETag"].should eq etag
+    response.headers["Last-Modified"].should eq last_modified
+    response.body.should eq "validators 1"
+    state.calls.should eq 1
+  end
+
+  it "returns 304 for matching If-None-Match requests" do
+    state = RequestState.new
+
+    mount_cache do
+      get "/etag-304" do
+        state.calls += 1
+        "etag #{state.calls}"
+      end
+    end
+
+    get "/etag-304"
+    etag = response.headers["ETag"]
+
+    get "/etag-304", headers: HTTP::Headers{"If-None-Match" => etag}
+    response.status_code.should eq 304
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq ""
+    response.headers["ETag"].should eq etag
+    state.calls.should eq 1
+  end
+
+  it "returns 304 for matching If-Modified-Since requests" do
+    state = RequestState.new
+
+    mount_cache do
+      get "/last-modified-304" do
+        state.calls += 1
+        "last-modified #{state.calls}"
+      end
+    end
+
+    get "/last-modified-304"
+    last_modified = response.headers["Last-Modified"]
+
+    get "/last-modified-304", headers: HTTP::Headers{"If-Modified-Since" => last_modified}
+    response.status_code.should eq 304
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq ""
+    response.headers["Last-Modified"].should eq last_modified
+    state.calls.should eq 1
+  end
+
+  it "prefers If-None-Match over If-Modified-Since" do
+    state = RequestState.new
+
+    mount_cache do
+      get "/validator-precedence" do
+        state.calls += 1
+        "precedence #{state.calls}"
+      end
+    end
+
+    get "/validator-precedence"
+    last_modified = response.headers["Last-Modified"]
+
+    get "/validator-precedence", headers: HTTP::Headers{
+      "If-None-Match"     => %("does-not-match"),
+      "If-Modified-Since" => last_modified,
+    }
+    response.status_code.should eq 200
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq "precedence 1"
+    state.calls.should eq 1
+  end
+
   it "uses the full request resource including query params as the cache key" do
     state = RequestState.new
 
