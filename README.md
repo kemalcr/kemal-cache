@@ -1,5 +1,7 @@
 # kemal-cache
 
+[![CI](https://github.com/kemalcr/kemal-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/kemalcr/kemal-cache/actions/workflows/ci.yml)
+
 `kemal-cache` is a lightweight response caching middleware for [Kemal](https://kemalcr.com/).
 It is designed to feel native to the `Kemal` ecosystem: small API surface, storage-agnostic,
 and safe to use in Crystal's multi-threaded runtime.
@@ -329,6 +331,7 @@ and it will not persist responses that explicitly opt out of storage or set cook
 ```bash
 shards install
 crystal spec
+crystal tool format --check
 ```
 
 ## Contributing
