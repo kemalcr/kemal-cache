@@ -14,6 +14,8 @@ module Kemal::Cache
     property auto_etag : Bool
     property auto_last_modified : Bool
     property conditional_get : Bool
+    property stats : Stats
+    property on_event : Proc(Event, Nil)?
     getter cacheable_methods : Array(String)
     getter cacheable_status_codes : Array(Int32)?
 
@@ -29,6 +31,8 @@ module Kemal::Cache
       @auto_etag : Bool = true,
       @auto_last_modified : Bool = true,
       @conditional_get : Bool = true,
+      @stats : Stats = Stats.new,
+      @on_event : Proc(Event, Nil)? = nil,
       cacheable_methods : Array(String) = ["GET"],
       cacheable_status_codes : Array(Int32)? = DEFAULT_CACHEABLE_STATUS_CODES,
     )
@@ -58,14 +62,18 @@ module Kemal::Cache
 
     def invalidate(key : String) : Nil
       @store.delete(key)
+      observe(EventType::Invalidate, key: key)
     end
 
     def invalidate(context : HTTP::Server::Context) : Nil
-      invalidate(cache_key(context))
+      key = cache_key(context)
+      @store.delete(key)
+      observe(EventType::Invalidate, key: key, context: context)
     end
 
     def clear_cache : Nil
       @store.clear
+      observe(EventType::Clear)
     end
 
     def cacheable_method?(method : String) : Bool
@@ -86,6 +94,25 @@ module Kemal::Cache
 
     def body_within_limit?(bytesize : Int32) : Bool
       @max_body_bytes.try { |limit| bytesize <= limit } != false
+    end
+
+    def observe(
+      type : EventType,
+      *,
+      key : String? = nil,
+      context : HTTP::Server::Context? = nil,
+      status_code : Int32? = nil,
+      detail : String? = nil,
+    ) : Nil
+      @stats.record(type)
+      @on_event.try(&.call(Event.new(
+        type,
+        key: key,
+        path: context.try(&.request.resource),
+        http_method: context.try(&.request.method),
+        status_code: status_code || context.try(&.response.status_code),
+        detail: detail,
+      )))
     end
   end
 end

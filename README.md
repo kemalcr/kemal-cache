@@ -235,6 +235,38 @@ Use `clear_cache` to purge the configured store:
 config.clear_cache
 ```
 
+### Observability
+
+Each config instance exposes thread-safe counters via `config.stats`:
+
+```crystal
+config.stats.hits
+config.stats.misses
+config.stats.stores
+config.stats.bypasses
+config.stats.not_modified
+config.stats.invalidations
+config.stats.clears
+config.stats.hit_ratio
+```
+
+You can also subscribe to cache lifecycle events with `on_event`:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  on_event: ->(event : Kemal::Cache::Event) do
+    Log.info do
+      "type=#{event.type} key=#{event.key} path=#{event.path} " \
+      "method=#{event.http_method} status=#{event.status_code} detail=#{event.detail}"
+    end
+  end
+)
+
+use Kemal::Cache::Handler.new(config)
+```
+
+Event types include `Hit`, `Miss`, `Store`, `Bypass`, `NotModified`, `Invalidate`, and `Clear`.
+
 ### Custom store
 
 `kemal-cache` includes a built-in `RedisStore` backed by

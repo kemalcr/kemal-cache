@@ -220,6 +220,75 @@ describe Kemal::Cache::Handler do
     state.calls.should eq 2
   end
 
+  it "tracks cache stats" do
+    config = Kemal::Cache::Config.new
+    state = RequestState.new
+
+    mount_cache(config) do
+      get "/stats" do
+        state.calls += 1
+        "stats #{state.calls}"
+      end
+    end
+
+    get "/stats"
+    get "/stats"
+    get "/stats", headers: HTTP::Headers{"Authorization" => "Bearer token"}
+    config.invalidate("/stats")
+    config.clear_cache
+
+    config.stats.misses.should eq 1
+    config.stats.stores.should eq 1
+    config.stats.hits.should eq 1
+    config.stats.bypasses.should eq 1
+    config.stats.not_modified.should eq 0
+    config.stats.invalidations.should eq 1
+    config.stats.clears.should eq 1
+    config.stats.requests.should eq 3
+    config.stats.hit_ratio.should eq 0.5
+  end
+
+  it "emits observable cache events" do
+    events = [] of Kemal::Cache::Event
+    config = Kemal::Cache::Config.new(
+      on_event: ->(event : Kemal::Cache::Event) { events << event }
+    )
+    state = RequestState.new
+
+    mount_cache(config) do
+      get "/events" do
+        state.calls += 1
+        "events #{state.calls}"
+      end
+    end
+
+    get "/events"
+    etag = response.headers["ETag"]
+    get "/events"
+    get "/events", headers: HTTP::Headers{"If-None-Match" => etag}
+    get "/events", headers: HTTP::Headers{"Authorization" => "Bearer token"}
+    config.invalidate("/events")
+    config.clear_cache
+
+    events.map(&.type).should eq([
+      Kemal::Cache::EventType::Store,
+      Kemal::Cache::EventType::Miss,
+      Kemal::Cache::EventType::Hit,
+      Kemal::Cache::EventType::Hit,
+      Kemal::Cache::EventType::NotModified,
+      Kemal::Cache::EventType::Bypass,
+      Kemal::Cache::EventType::Invalidate,
+      Kemal::Cache::EventType::Clear,
+    ])
+
+    events[0].key.should eq "/events"
+    events[0].path.should eq "/events"
+    events[0].http_method.should eq "GET"
+    events[4].status_code.should eq 304
+    events[5].detail.should eq "authorization_header"
+    events[6].key.should eq "/events"
+  end
+
   it "invalidates cached entries by explicit key" do
     state = RequestState.new
     config = Kemal::Cache::Config.new

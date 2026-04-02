@@ -9,7 +9,9 @@ module Kemal::Cache
     end
 
     def call(context : HTTP::Server::Context)
-      return bypass(context) unless request_cacheable?(context)
+      if bypass_reason = request_bypass_reason(context)
+        return bypass(context, bypass_reason)
+      end
 
       key = cache_key(context)
 
@@ -21,35 +23,42 @@ module Kemal::Cache
       write_miss(context, key)
     end
 
-    private def request_cacheable?(context : HTTP::Server::Context) : Bool
-      @config.cacheable_method?(context.request.method) &&
-        !@config.skip?(context) &&
-        !header_present?(context.request.headers, "authorization") &&
-        !header_present?(context.request.headers, "cookie")
+    private def request_bypass_reason(context : HTTP::Server::Context) : String?
+      return "method_not_cacheable" unless @config.cacheable_method?(context.request.method)
+      return "skip_if" if @config.skip?(context)
+      return "authorization_header" if header_present?(context.request.headers, "authorization")
+      return "cookie_header" if header_present?(context.request.headers, "cookie")
+
+      nil
     end
 
     private def cache_key(context : HTTP::Server::Context) : String
       @config.cache_key(context)
     end
 
-    private def bypass(context : HTTP::Server::Context) : Nil
+    private def bypass(context : HTTP::Server::Context, reason : String) : Nil
       context.response.headers[HEADER_NAME] = "MISS"
+      @config.observe(EventType::Bypass, context: context, detail: reason)
       call_next(context)
     end
 
     private def write_hit(context : HTTP::Server::Context, payload : String) : Nil
       cached_response = CachedResponse.from_json(payload)
+      key = cache_key(context)
 
       context.response.headers.clear
       restore_headers(context.response.headers, cached_response.headers)
       if not_modified?(context.request, cached_response.headers)
         context.response.status_code = 304
         context.response.headers[HEADER_NAME] = "HIT"
+        @config.observe(EventType::Hit, key: key, context: context, status_code: 304)
+        @config.observe(EventType::NotModified, key: key, context: context, status_code: 304)
         return
       end
 
       context.response.status_code = cached_response.status_code
       context.response.headers[HEADER_NAME] = "HIT"
+      @config.observe(EventType::Hit, key: key, context: context, status_code: cached_response.status_code)
       context.response.print cached_response.body
     end
 
@@ -71,10 +80,12 @@ module Kemal::Cache
 
       if should_store
         @config.store.set(key, payload, @config.expires_in)
+        @config.observe(EventType::Store, key: key, context: context)
       end
 
       context.response.output = original_output
       context.response.headers[HEADER_NAME] = "MISS"
+      @config.observe(EventType::Miss, key: key, context: context)
       context.response.print body
     ensure
       context.response.output = original_output.not_nil!

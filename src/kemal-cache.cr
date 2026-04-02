@@ -1,6 +1,7 @@
 require "kemal"
 require "digest/sha256"
 require "redis"
+require "./kemal-cache/observability"
 require "./kemal-cache/store"
 require "./kemal-cache/cache_entry"
 require "./kemal-cache/cached_response"
