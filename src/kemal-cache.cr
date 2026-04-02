@@ -1,0 +1,2 @@
+module Kemal::Cache
+end
