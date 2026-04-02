@@ -456,6 +456,27 @@ describe Kemal::Cache::Handler do
     state.calls.should eq 1
   end
 
+  it "can cache large responses when body limits are disabled" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new(max_body_bytes: nil)
+
+    mount_cache(config) do
+      get "/large-body-unlimited" do
+        state.calls += 1
+        "large-body-#{state.calls}"
+      end
+    end
+
+    get "/large-body-unlimited"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "large-body-1"
+
+    get "/large-body-unlimited"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq "large-body-1"
+    state.calls.should eq 1
+  end
+
   it "adds ETag and Last-Modified headers to cached responses" do
     state = RequestState.new
 
@@ -479,6 +500,56 @@ describe Kemal::Cache::Handler do
     response.headers["ETag"].should eq etag
     response.headers["Last-Modified"].should eq last_modified
     response.body.should eq "validators 1"
+    state.calls.should eq 1
+  end
+
+  it "preserves existing ETag and Last-Modified headers" do
+    state = RequestState.new
+
+    mount_cache do
+      get "/validators-preserved" do |env|
+        state.calls += 1
+        env.response.headers["ETag"] = %("custom-etag")
+        env.response.headers["Last-Modified"] = "Mon, 01 Jan 2024 00:00:00 GMT"
+        "preserved #{state.calls}"
+      end
+    end
+
+    get "/validators-preserved"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.headers["ETag"].should eq %("custom-etag")
+    response.headers["Last-Modified"].should eq "Mon, 01 Jan 2024 00:00:00 GMT"
+
+    get "/validators-preserved"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.headers["ETag"].should eq %("custom-etag")
+    response.headers["Last-Modified"].should eq "Mon, 01 Jan 2024 00:00:00 GMT"
+    state.calls.should eq 1
+  end
+
+  it "does not auto-generate validators when disabled" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new(
+      auto_etag: false,
+      auto_last_modified: false
+    )
+
+    mount_cache(config) do
+      get "/validators-disabled" do
+        state.calls += 1
+        "disabled #{state.calls}"
+      end
+    end
+
+    get "/validators-disabled"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.headers["ETag"]?.should be_nil
+    response.headers["Last-Modified"]?.should be_nil
+
+    get "/validators-disabled"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.headers["ETag"]?.should be_nil
+    response.headers["Last-Modified"]?.should be_nil
     state.calls.should eq 1
   end
 
@@ -521,6 +592,27 @@ describe Kemal::Cache::Handler do
     response.headers["X-Kemal-Cache"].should eq "HIT"
     response.body.should eq ""
     response.headers["Last-Modified"].should eq last_modified
+    state.calls.should eq 1
+  end
+
+  it "does not return 304 when conditional GET support is disabled" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new(conditional_get: false)
+
+    mount_cache(config) do
+      get "/conditional-disabled" do
+        state.calls += 1
+        "conditional #{state.calls}"
+      end
+    end
+
+    get "/conditional-disabled"
+    etag = response.headers["ETag"]
+
+    get "/conditional-disabled", headers: HTTP::Headers{"If-None-Match" => etag}
+    response.status_code.should eq 200
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq "conditional 1"
     state.calls.should eq 1
   end
 
