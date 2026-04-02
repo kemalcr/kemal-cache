@@ -335,6 +335,12 @@ crystal spec
 crystal tool format --check
 ```
 
+To run the real Redis integration spec locally, start Redis and set `REDIS_URL`:
+
+```bash
+REDIS_URL=redis://localhost:6379/0 crystal spec
+```
+
 ## Contributing
 
 1. Fork it (<https://github.com/kemalcr/kemal-cache/fork>)

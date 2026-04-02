@@ -115,3 +115,11 @@ def mount_cache(config : Kemal::Cache::Config = Kemal::Cache::Config.new, &)
   yield
   Kemal.config.setup
 end
+
+def real_redis_url : String?
+  ENV["REDIS_URL"]?
+end
+
+def unique_redis_namespace(prefix : String = "kemal-cache-spec") : String
+  "#{prefix}-#{Random.rand(1_000_000)}-#{Time.utc.to_unix_ms}"
+end
