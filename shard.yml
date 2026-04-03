@@ -7,12 +7,12 @@ authors:
 dependencies:
   kemal:
     github: kemalcr/kemal
-  redis:
-    github: jgaskins/redis
 
 development_dependencies:
   spec-kemal:
     github: kemalcr/spec-kemal
+  redis:
+    github: jgaskins/redis
 
 crystal: '>= 1.19.1'
 

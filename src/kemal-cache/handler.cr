@@ -16,8 +16,10 @@ module Kemal::Cache
       key = cache_key(context)
 
       if payload = @config.store.get(key)
-        write_hit(context, payload)
-        return
+        if cached_response = deserialize_cached_response(payload, key, context)
+          write_hit(context, key, cached_response)
+          return
+        end
       end
 
       write_miss(context, key)
@@ -42,10 +44,15 @@ module Kemal::Cache
       call_next(context)
     end
 
-    private def write_hit(context : HTTP::Server::Context, payload : String) : Nil
-      cached_response = CachedResponse.from_json(payload)
-      key = cache_key(context)
+    private def deserialize_cached_response(payload : String, key : String, context : HTTP::Server::Context) : CachedResponse?
+      CachedResponse.from_json(payload)
+    rescue error : JSON::ParseException | TypeCastError
+      @config.store.delete(key)
+      @config.observe(EventType::Invalidate, key: key, context: context, detail: "corrupt_payload")
+      nil
+    end
 
+    private def write_hit(context : HTTP::Server::Context, key : String, cached_response : CachedResponse) : Nil
       context.response.headers.clear
       restore_headers(context.response.headers, cached_response.headers)
       if not_modified?(context.request, cached_response.headers)

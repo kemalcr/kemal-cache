@@ -1,4 +1,4 @@
-require "./spec_helper"
+require "./redis_helper"
 
 describe Kemal::Cache::RedisStore do
   it "stores, deletes, clears, and expires values within its namespace" do
@@ -16,6 +16,7 @@ describe Kemal::Cache::RedisStore do
     client.set("other-cache:keep", "3", ex: 20.milliseconds)
     store.clear
 
+    client.last_scan_pattern.should eq("spec-cache:*")
     store.get("one").should be_nil
     store.get("two").should be_nil
     client.get("other-cache:keep").should eq("3")

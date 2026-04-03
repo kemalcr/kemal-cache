@@ -796,6 +796,30 @@ describe Kemal::Cache::Handler do
     store.last_value.should_not be_nil
   end
 
+  it "invalidates corrupt cached payloads and falls back to a miss" do
+    store = RecordingStore.new
+    store.prime("/corrupt", %({"status_code":"oops"}))
+    config = Kemal::Cache::Config.new(store: store)
+    state = RequestState.new
+
+    mount_cache(config) do
+      get "/corrupt" do
+        state.calls += 1
+        "corrupt #{state.calls}"
+      end
+    end
+
+    get "/corrupt"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "corrupt 1"
+    config.stats.invalidations.should eq 1
+
+    get "/corrupt"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.body.should eq "corrupt 1"
+    state.calls.should eq 1
+  end
+
   it "does not persist disallowed status codes" do
     store = RecordingStore.new
     config = Kemal::Cache::Config.new(

@@ -1,3 +1,9 @@
+# Unreleased
+
+- Made Redis support opt-in via `require "kemal-cache/redis"` so the core middleware can be used without a runtime Redis dependency.
+- Switched `RedisStore#clear` from `KEYS` to cursor-based `SCAN` iteration.
+- Invalidates corrupt cached payloads and falls back to a cache miss instead of failing the request.
+
 # 1.0.0 - (04-02-2026)
 
 Initial stable release of `kemal-cache`.

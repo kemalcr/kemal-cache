@@ -30,6 +30,9 @@ Then install dependencies:
 shards install
 ```
 
+`require "kemal-cache"` only loads the core middleware and `MemoryStore`.
+If you want `RedisStore`, add `redis` to your application's `shard.yml` and require `kemal-cache/redis`.
+
 ## Quick Start
 
 ```crystal
@@ -208,7 +211,17 @@ config = Kemal::Cache::Config.new(
 
 `kemal-cache` includes a built-in `RedisStore` backed by [`jgaskins/redis`](https://github.com/jgaskins/redis):
 
+```yaml
+dependencies:
+  kemal-cache:
+    github: kemalcr/kemal-cache
+  redis:
+    github: jgaskins/redis
+```
+
 ```crystal
+require "kemal-cache/redis"
+
 store = Kemal::Cache::RedisStore.new(
   URI.parse("redis://localhost:6379/0"),
   namespace: "my-app-cache"
@@ -224,6 +237,8 @@ You can also build a Redis store from an environment variable:
 store = Kemal::Cache::RedisStore.from_env("REDIS_URL")
 config = Kemal::Cache::Config.new(store: store)
 ```
+
+`RedisStore#clear` removes namespaced keys with Redis `SCAN`, so it avoids the blocking behavior of `KEYS` on large datasets.
 
 ### Custom Stores
 

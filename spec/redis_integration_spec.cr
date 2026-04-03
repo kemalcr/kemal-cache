@@ -1,4 +1,4 @@
-require "./spec_helper"
+require "./redis_helper"
 
 describe Kemal::Cache::RedisStore do
   it "works against a real Redis instance" do
