@@ -2,19 +2,37 @@
 
 [![CI](https://github.com/kemalcr/kemal-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/kemalcr/kemal-cache/actions/workflows/ci.yml)
 
-`kemal-cache` is a response caching middleware for [Kemal](https://kemalcr.com/).
-It is intentionally small, storage-agnostic, and safe by default.
+## Powerful Caching For Kemal Applications
 
-## Highlights
+`kemal-cache` is production-oriented response caching middleware for [Kemal](https://kemalcr.com/).
+It is built for teams that want lower response times, less repeated work, and safer HTTP caching behavior without bolting on a large framework.
 
-- Kemal-native middleware API
-- safe defaults for authenticated, cookie-bearing, and non-cacheable responses
+Use it when your application serves expensive pages, API responses, catalog endpoints, content feeds, or read-heavy routes that should be fast on repeat requests.
+
+## Why `kemal-cache`
+
+- Kemal-native middleware with a clean Crystal API
+- safe-by-default behavior for authenticated, cookie-bearing, and private responses
 - in-memory and Redis-backed stores
-- custom cache keys, filters, and invalidation
-- HTTP validator support with `ETag`, `Last-Modified`, and `304 Not Modified`
-- built-in observability via counters and event hooks
+- custom cache keys, filters, invalidation, and TTL policies
+- automatic `ETag` and `Last-Modified` generation
+- conditional request support with `304 Not Modified`
+- built-in counters and event hooks for observability
+- focused surface area that stays easy to reason about
 
-## Installation
+## What You Get
+
+`kemal-cache` is designed to cover the caching capabilities most Kemal apps actually need:
+
+- route-level response caching with minimal setup
+- storage-agnostic design via `Store`
+- strong default rules around what should not be cached
+- request-aware cache keys
+- explicit invalidation APIs
+- safe fallback behavior when cached payloads are corrupt
+- deployment flexibility from single-process apps to multi-instance Redis-backed setups
+
+## Quick Start
 
 Add the shard to `shard.yml`:
 
@@ -24,16 +42,13 @@ dependencies:
     github: kemalcr/kemal-cache
 ```
 
-Then install dependencies:
+Install dependencies:
 
 ```bash
 shards install
 ```
 
-`require "kemal-cache"` only loads the core middleware and `MemoryStore`.
-If you want `RedisStore`, add `redis` to your application's `shard.yml` and require `kemal-cache/redis`.
-
-## Quick Start
+Then add the middleware:
 
 ```crystal
 require "kemal-cache"
@@ -47,29 +62,90 @@ end
 Kemal.run
 ```
 
-The middleware adds `X-Kemal-Cache: MISS` or `X-Kemal-Cache: HIT` so cache behavior is visible during development.
+Every response will include `X-Kemal-Cache: MISS` or `X-Kemal-Cache: HIT`, so cache behavior is visible immediately during development and debugging.
 
-## Default Behavior
+## Out-Of-The-Box Behavior
 
-Out of the box, `kemal-cache`:
+Without any configuration, `kemal-cache`:
 
 - caches `GET` requests only
 - uses `context.request.resource` as the cache key
 - caches successful `2xx` responses only
 - stores entries for `10.minutes`
-- uses the in-process `Kemal::Cache::MemoryStore`
-- bypasses cache for requests with `Authorization` or `Cookie`
+- uses `Kemal::Cache::MemoryStore`
+- bypasses requests with `Authorization` or `Cookie`
 - skips storing responses with `Set-Cookie`
 - skips storing responses with `Cache-Control: no-store`, `no-cache`, or `private`
 - skips storing responses with `Vary: *`
 - skips storing responses larger than `1_048_576` bytes
 - skips storing responses that call `flush`
-- auto-generates `ETag` and `Last-Modified` for cached responses
-- answers matching conditional requests with `304 Not Modified`
+- auto-generates `ETag` and `Last-Modified`
+- returns `304 Not Modified` for matching conditional requests
+
+Those defaults are intentionally conservative so the middleware is useful in production without forcing you to hand-audit every route first.
+
+## Installation Notes
+
+`require "kemal-cache"` loads the core middleware and `MemoryStore`.
+
+If you want Redis support, add `redis` to your application and require the Redis entrypoint explicitly:
+
+```yaml
+dependencies:
+  kemal-cache:
+    github: kemalcr/kemal-cache
+  redis:
+    github: jgaskins/redis
+```
+
+```crystal
+require "kemal-cache/redis"
+```
+
+This keeps the base package lean for applications that only need in-process caching.
+
+## Common Use Cases
+
+### Cache expensive HTML pages
+
+```crystal
+require "kemal-cache"
+
+use Kemal::Cache::Handler.new
+
+get "/pricing" do
+  render "src/views/pricing.ecr"
+end
+```
+
+### Cache API responses with a custom TTL
+
+```crystal
+config = Kemal::Cache::Config.new(
+  expires_in: 2.minutes
+)
+
+use Kemal::Cache::Handler.new(config)
+
+get "/api/products" do
+  ProductSerializer.render(ProductQuery.latest)
+end
+```
+
+### Share cache across multiple app instances with Redis
+
+```crystal
+require "kemal-cache/redis"
+
+store = Kemal::Cache::RedisStore.from_env("REDIS_URL", namespace: "shop-api-cache")
+config = Kemal::Cache::Config.new(store: store)
+
+use Kemal::Cache::Handler.new(config)
+```
 
 ## Configuration
 
-Create a custom `Kemal::Cache::Config` when you want to override the defaults:
+Create a custom `Kemal::Cache::Config` when you want to tune behavior:
 
 ```crystal
 require "kemal-cache"
@@ -92,8 +168,9 @@ use Kemal::Cache::Handler.new(config)
 
 ### Cache Keys
 
-The default key is `context.request.resource`, which includes the path and query string.
-Override it with `key_generator` when you need coarser or finer cache granularity:
+By default the key is `context.request.resource`, which includes the path and query string.
+
+Override it with `key_generator` when you need to change cache granularity:
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -104,7 +181,7 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-### Cacheable Methods and Status Codes
+### Methods And Status Codes
 
 Opt in to additional HTTP methods:
 
@@ -130,9 +207,9 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-### Request and Response Filters
+### Request And Response Filters
 
-Use `skip_if` to bypass both lookup and storage for matching requests:
+Use `skip_if` to bypass both lookup and storage:
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -142,7 +219,7 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-Use `should_cache` for the final storage decision after the response has been built:
+Use `should_cache` for the final storage decision after the response is built:
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -158,7 +235,7 @@ Temporarily disable caching without removing the middleware:
 config = Kemal::Cache::Config.new(enabled: false)
 ```
 
-### Response Size and Streaming Guards
+### Response Size And Streaming Guards
 
 Adjust the body size limit:
 
@@ -168,7 +245,7 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-Disable the size limit entirely:
+Disable the body size limit entirely:
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -186,7 +263,7 @@ config = Kemal::Cache::Config.new(
 
 ### HTTP Validators
 
-Validator support is enabled by default for cached responses:
+Validator support is enabled by default:
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -196,8 +273,9 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-If your application already manages these headers, `kemal-cache` preserves them.
-You can also disable automatic validators or conditional handling:
+If your application already manages validator headers, `kemal-cache` preserves them.
+
+You can disable automatic validators or conditional handling:
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -209,28 +287,23 @@ config = Kemal::Cache::Config.new(
 
 ## Stores
 
-### MemoryStore
+### `MemoryStore`
 
-`Kemal::Cache::MemoryStore` is the default store. It is protected by a `Mutex` and is safe to use in Crystal's multi-threaded runtime. Because it is process-local, it is best suited to development and single-instance deployments.
+`Kemal::Cache::MemoryStore` is the default store.
+It is thread-safe and process-local, which makes it a strong fit for development, single-instance deployments, and lightweight production services.
 
-You can also cap the number of retained entries. When the limit is reached, the oldest entry is evicted on the next write:
+You can also cap the number of retained entries:
 
 ```crystal
 store = Kemal::Cache::MemoryStore.new(max_entries: 10_000)
 config = Kemal::Cache::Config.new(store: store)
 ```
 
-### RedisStore
+When the limit is reached, the oldest entry is evicted on the next write.
 
-`kemal-cache` includes a built-in `RedisStore` backed by [`jgaskins/redis`](https://github.com/jgaskins/redis):
+### `RedisStore`
 
-```yaml
-dependencies:
-  kemal-cache:
-    github: kemalcr/kemal-cache
-  redis:
-    github: jgaskins/redis
-```
+`RedisStore` is intended for shared caching across multiple application instances:
 
 ```crystal
 require "kemal-cache/redis"
@@ -244,18 +317,18 @@ config = Kemal::Cache::Config.new(store: store)
 use Kemal::Cache::Handler.new(config)
 ```
 
-You can also build a Redis store from an environment variable:
+You can also build it from an environment variable:
 
 ```crystal
 store = Kemal::Cache::RedisStore.from_env("REDIS_URL")
 config = Kemal::Cache::Config.new(store: store)
 ```
 
-`RedisStore#clear` removes namespaced keys with Redis `SCAN`, so it avoids the blocking behavior of `KEYS` on large datasets.
+`RedisStore#clear` removes namespaced keys using Redis `SCAN`, which avoids the blocking behavior of `KEYS` on large datasets.
 
 ### Custom Stores
 
-Create a custom store by inheriting from `Kemal::Cache::Store`:
+Build your own store by inheriting from `Kemal::Cache::Store`:
 
 ```crystal
 class CustomStore < Kemal::Cache::Store
@@ -277,7 +350,7 @@ class CustomStore < Kemal::Cache::Store
 end
 ```
 
-Then wire it into the config:
+Wire it into the config:
 
 ```crystal
 config = Kemal::Cache::Config.new(store: CustomStore.new)
@@ -293,7 +366,7 @@ config = Kemal::Cache::Config.new
 config.invalidate("/articles?page=2")
 ```
 
-If the key depends on the current request context, invalidate directly from a route:
+Invalidate directly from a request context when the key depends on request data:
 
 ```crystal
 post "/articles/cache/invalidate" do |env|
@@ -310,7 +383,7 @@ config.clear_cache
 
 ## Observability
 
-Each config instance exposes thread-safe counters through `config.stats`:
+Each config instance exposes thread-safe counters:
 
 ```crystal
 config.stats.hits
@@ -325,10 +398,13 @@ config.stats.requests
 config.stats.hit_ratio
 ```
 
-`not_modified` is a subset of `hits`, because conditional `304 Not Modified` responses are still cache hits.
-`cacheable_requests` counts `hits + misses`, while `requests` adds bypassed requests on top.
+Semantics:
 
-You can also subscribe to cache lifecycle events with `on_event`:
+- `not_modified` is a subset of `hits`
+- `cacheable_requests` is `hits + misses`
+- `requests` is `cacheable_requests + bypasses`
+
+You can also subscribe to lifecycle events:
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -355,18 +431,21 @@ Available event types:
 
 Common bypass details include `disabled`, `method_not_cacheable`, `skip_if`, `authorization_header`, and `cookie_header`.
 
-## How It Works
-
-On a cache miss, the middleware buffers the response body, stores it with the configured TTL, and then writes the response back to the client. On a cache hit, it restores the cached response without invoking the rest of the handler chain.
-
-For safer defaults, the middleware bypasses authenticated and cookie-bearing requests and does not persist responses that explicitly opt out of storage.
-
-## Deployment Notes
+## Operational Notes
 
 - `MemoryStore` is process-local, so each app instance keeps its own cache.
 - Use `RedisStore` when multiple instances should share cached responses.
-- `clear_cache` only clears the configured store namespace; it does not flush unrelated Redis keys.
+- `clear_cache` only clears the configured store namespace.
 - Corrupt cached payloads are discarded automatically and retried as cache misses.
+- Upstream middleware headers are preserved unless the cached response intentionally replaces the same header name.
+
+## How It Works
+
+On a cache miss, the middleware buffers the response body, decides whether the response is storable, persists it with the configured TTL, and then writes the response to the client.
+
+On a cache hit, it restores the cached body, status, and response headers without invoking the rest of the handler chain.
+
+For safer defaults, the middleware bypasses authenticated and cookie-bearing requests and refuses to store responses that explicitly opt out of caching.
 
 ## Development
 
