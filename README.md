@@ -361,6 +361,13 @@ On a cache miss, the middleware buffers the response body, stores it with the co
 
 For safer defaults, the middleware bypasses authenticated and cookie-bearing requests and does not persist responses that explicitly opt out of storage.
 
+## Deployment Notes
+
+- `MemoryStore` is process-local, so each app instance keeps its own cache.
+- Use `RedisStore` when multiple instances should share cached responses.
+- `clear_cache` only clears the configured store namespace; it does not flush unrelated Redis keys.
+- Corrupt cached payloads are discarded automatically and retried as cache misses.
+
 ## Development
 
 ```bash
