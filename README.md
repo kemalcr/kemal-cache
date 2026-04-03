@@ -152,6 +152,12 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
+Temporarily disable caching without removing the middleware:
+
+```crystal
+config = Kemal::Cache::Config.new(enabled: false)
+```
+
 ### Response Size and Streaming Guards
 
 Adjust the body size limit:
@@ -206,6 +212,13 @@ config = Kemal::Cache::Config.new(
 ### MemoryStore
 
 `Kemal::Cache::MemoryStore` is the default store. It is protected by a `Mutex` and is safe to use in Crystal's multi-threaded runtime. Because it is process-local, it is best suited to development and single-instance deployments.
+
+You can also cap the number of retained entries. When the limit is reached, the oldest entry is evicted on the next write:
+
+```crystal
+store = Kemal::Cache::MemoryStore.new(max_entries: 10_000)
+config = Kemal::Cache::Config.new(store: store)
+```
 
 ### RedisStore
 
@@ -302,6 +315,7 @@ Each config instance exposes thread-safe counters through `config.stats`:
 ```crystal
 config.stats.hits
 config.stats.misses
+config.stats.cacheable_requests
 config.stats.stores
 config.stats.bypasses
 config.stats.not_modified
@@ -310,6 +324,9 @@ config.stats.clears
 config.stats.requests
 config.stats.hit_ratio
 ```
+
+`not_modified` is a subset of `hits`, because conditional `304 Not Modified` responses are still cache hits.
+`cacheable_requests` counts `hits + misses`, while `requests` adds bypassed requests on top.
 
 You can also subscribe to cache lifecycle events with `on_event`:
 
@@ -335,6 +352,8 @@ Available event types:
 - `NotModified`
 - `Invalidate`
 - `Clear`
+
+Common bypass details include `disabled`, `method_not_cacheable`, `skip_if`, `authorization_header`, and `cookie_header`.
 
 ## How It Works
 

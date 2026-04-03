@@ -3,6 +3,9 @@
 - Made Redis support opt-in via `require "kemal-cache/redis"` so the core middleware can be used without a runtime Redis dependency.
 - Switched `RedisStore#clear` from `KEYS` to cursor-based `SCAN` iteration.
 - Invalidates corrupt cached payloads and falls back to a cache miss instead of failing the request.
+- Added an optional `MemoryStore` entry cap with oldest-entry eviction.
+- Added a distinct `disabled` bypass reason and clarified stats semantics for cacheable requests and `304 Not Modified` hits.
+- Preserves headers set before the cache handler on cache hits unless the cached response replaces that header name.
 
 # 1.0.0 - (04-02-2026)
 

@@ -77,7 +77,7 @@ module Kemal::Cache
     end
 
     def cacheable_method?(method : String) : Bool
-      @enabled && @cacheable_methods.includes?(method.upcase)
+      @cacheable_methods.includes?(method.upcase)
     end
 
     def cacheable_status_code?(status_code : Int32) : Bool

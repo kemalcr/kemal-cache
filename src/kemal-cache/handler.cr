@@ -26,6 +26,7 @@ module Kemal::Cache
     end
 
     private def request_bypass_reason(context : HTTP::Server::Context) : String?
+      return "disabled" unless @config.enabled
       return "method_not_cacheable" unless @config.cacheable_method?(context.request.method)
       return "skip_if" if @config.skip?(context)
       return "authorization_header" if header_present?(context.request.headers, "authorization")
@@ -53,7 +54,7 @@ module Kemal::Cache
     end
 
     private def write_hit(context : HTTP::Server::Context, key : String, cached_response : CachedResponse) : Nil
-      context.response.headers.clear
+      prepare_hit_headers(context.response.headers, cached_response.headers)
       restore_headers(context.response.headers, cached_response.headers)
       if not_modified?(context.request, cached_response.headers)
         context.response.status_code = 304
@@ -69,9 +70,20 @@ module Kemal::Cache
       context.response.print cached_response.body
     end
 
+    private def prepare_hit_headers(headers : HTTP::Headers, cached_headers : Hash(String, Array(String))) : Nil
+      cached_headers.each_key do |name|
+        headers.delete(name)
+      end
+
+      headers.delete(HEADER_NAME)
+      headers.delete("Content-Length")
+      headers.delete("Transfer-Encoding")
+    end
+
     private def write_miss(context : HTTP::Server::Context, key : String) : Nil
       original_output = context.response.output
       capture_output = CaptureIO.new
+      baseline_headers = snapshot_headers(context.response.headers)
 
       context.response.output = capture_output
       call_next(context)
@@ -81,7 +93,7 @@ module Kemal::Cache
       ensure_cache_validators(context.response, body) if should_store
       payload = CachedResponse.new(
         status_code: context.response.status_code,
-        headers: snapshot_headers(context.response.headers),
+        headers: snapshot_response_headers(context.response.headers, baseline_headers),
         body: body
       ).to_json
 
@@ -111,6 +123,19 @@ module Kemal::Cache
 
       source.each do |name, values|
         next if skip_header?(name)
+        headers[name] = values.dup
+      end
+
+      headers
+    end
+
+    private def snapshot_response_headers(source : HTTP::Headers, baseline_headers : Hash(String, Array(String))) : Hash(String, Array(String))
+      headers = {} of String => Array(String)
+
+      source.each do |name, values|
+        next if skip_header?(name)
+        next if baseline_headers[name]? == values
+
         headers[name] = values.dup
       end
 

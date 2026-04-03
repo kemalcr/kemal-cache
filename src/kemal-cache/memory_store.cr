@@ -1,6 +1,8 @@
 module Kemal::Cache
   class MemoryStore < Store
-    def initialize
+    getter max_entries : Int32?
+
+    def initialize(@max_entries : Int32? = nil)
       @entries = {} of String => CacheEntry
       @mutex = Mutex.new
     end
@@ -20,6 +22,7 @@ module Kemal::Cache
 
     def set(key : String, value : String, ttl : Time::Span) : Nil
       @mutex.synchronize do
+        evict_oldest_entry if should_evict_before_write?(key)
         @entries[key] = CacheEntry.new(value, ttl)
       end
     end
@@ -34,6 +37,17 @@ module Kemal::Cache
       @mutex.synchronize do
         @entries.clear
       end
+    end
+
+    private def should_evict_before_write?(key : String) : Bool
+      limit = @max_entries
+      return false unless limit
+
+      !@entries.has_key?(key) && @entries.size >= limit
+    end
+
+    private def evict_oldest_entry : Nil
+      @entries.shift? if @entries.any?
     end
   end
 end

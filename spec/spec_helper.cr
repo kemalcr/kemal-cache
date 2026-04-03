@@ -19,6 +19,16 @@ class RequestState
   end
 end
 
+class RequestHeaderHandler < Kemal::Handler
+  def initialize(@name : String, @value : Proc(HTTP::Server::Context, String))
+  end
+
+  def call(context : HTTP::Server::Context)
+    context.response.headers[@name] = @value.call(context)
+    call_next(context)
+  end
+end
+
 class RecordingStore < Kemal::Cache::Store
   getter last_key : String?
   getter last_value : String?

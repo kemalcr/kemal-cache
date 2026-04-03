@@ -84,15 +84,19 @@ module Kemal::Cache
       @clears.get
     end
 
+    def cacheable_requests : Int64
+      hits + misses
+    end
+
     def requests : Int64
-      hits + misses + bypasses
+      cacheable_requests + bypasses
     end
 
     def hit_ratio : Float64
-      cacheable_requests = hits + misses
-      return 0.0 if cacheable_requests.zero?
+      total_cacheable_requests = cacheable_requests
+      return 0.0 if total_cacheable_requests.zero?
 
-      hits / cacheable_requests
+      hits.to_f / total_cacheable_requests
     end
   end
 end

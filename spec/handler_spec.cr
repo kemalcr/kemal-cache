@@ -244,7 +244,33 @@ describe Kemal::Cache::Handler do
     config.stats.not_modified.should eq 0
     config.stats.invalidations.should eq 1
     config.stats.clears.should eq 1
+    config.stats.cacheable_requests.should eq 2
     config.stats.requests.should eq 3
+    config.stats.hit_ratio.should eq 0.5
+  end
+
+  it "counts 304 responses as hits in stats" do
+    config = Kemal::Cache::Config.new
+    state = RequestState.new
+
+    mount_cache(config) do
+      get "/stats-304" do
+        state.calls += 1
+        "stats-304 #{state.calls}"
+      end
+    end
+
+    get "/stats-304"
+    etag = response.headers["ETag"]
+
+    get "/stats-304", headers: HTTP::Headers{"If-None-Match" => etag}
+    response.status_code.should eq 304
+
+    config.stats.hits.should eq 1
+    config.stats.misses.should eq 1
+    config.stats.not_modified.should eq 1
+    config.stats.cacheable_requests.should eq 2
+    config.stats.requests.should eq 2
     config.stats.hit_ratio.should eq 0.5
   end
 
@@ -705,7 +731,11 @@ describe Kemal::Cache::Handler do
   end
 
   it "respects the enabled flag" do
-    config = Kemal::Cache::Config.new(enabled: false)
+    events = [] of Kemal::Cache::Event
+    config = Kemal::Cache::Config.new(
+      enabled: false,
+      on_event: ->(event : Kemal::Cache::Event) { events << event }
+    )
     state = RequestState.new
 
     mount_cache(config) do
@@ -724,6 +754,36 @@ describe Kemal::Cache::Handler do
     response.body.should eq "disabled 2"
     state.calls.should eq 2
     config.store.get("/disabled").should be_nil
+    events.map(&.detail).uniq.should eq(["disabled"])
+  end
+
+  it "preserves headers set before the cache handler on hits" do
+    config = Kemal::Cache::Config.new
+    state = RequestState.new
+    request_counter = 0
+
+    use RequestHeaderHandler.new("X-Request-Id", ->(_context : HTTP::Server::Context) do
+      request_counter += 1
+      "req-#{request_counter}"
+    end)
+    use Kemal::Cache::Handler.new(config)
+    get "/upstream-headers" do |env|
+      state.calls += 1
+      env.response.headers["X-Route-Version"] = "route-#{state.calls}"
+      "upstream #{state.calls}"
+    end
+    Kemal.config.setup
+
+    get "/upstream-headers"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.headers["X-Request-Id"].should eq "req-1"
+    response.headers["X-Route-Version"].should eq "route-1"
+
+    get "/upstream-headers"
+    response.headers["X-Kemal-Cache"].should eq "HIT"
+    response.headers["X-Request-Id"].should eq "req-2"
+    response.headers["X-Route-Version"].should eq "route-1"
+    state.calls.should eq 1
   end
 
   it "expires cached responses using the configured ttl" do

@@ -20,4 +20,16 @@ describe Kemal::Cache::MemoryStore do
     sleep 10.milliseconds
     store.get("short").should be_nil
   end
+
+  it "evicts the oldest entry when max_entries is reached" do
+    store = Kemal::Cache::MemoryStore.new(max_entries: 2)
+
+    store.set("one", "1", 20.milliseconds)
+    store.set("two", "2", 20.milliseconds)
+    store.set("three", "3", 20.milliseconds)
+
+    store.get("one").should be_nil
+    store.get("two").should eq("2")
+    store.get("three").should eq("3")
+  end
 end
