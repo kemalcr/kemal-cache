@@ -1,4 +1,4 @@
-# Unreleased
+# 1.1.0 - (03-04-2026)
 
 - Made Redis support opt-in via `require "kemal-cache/redis"` so the core middleware can be used without a runtime Redis dependency.
 - Switched `RedisStore#clear` from `KEYS` to cursor-based `SCAN` iteration.
@@ -7,7 +7,7 @@
 - Added a distinct `disabled` bypass reason and clarified stats semantics for cacheable requests and `304 Not Modified` hits.
 - Preserves headers set before the cache handler on cache hits unless the cached response replaces that header name.
 
-# 1.0.0 - (04-02-2026)
+# 1.0.0 - (02-04-2026)
 
 Initial stable release of `kemal-cache`.
 
