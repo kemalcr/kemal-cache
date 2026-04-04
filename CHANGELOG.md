@@ -1,4 +1,4 @@
-# Unreleased
+# 1.2.0 (04-04-2026)
 
 - Added fail-open handler behavior for store `get`, `set`, and corrupt-payload `delete` errors so cache backend failures do not break otherwise successful requests.
 - Added observable `StoreError` events and `stats.store_errors` counters for cache backend failures.
