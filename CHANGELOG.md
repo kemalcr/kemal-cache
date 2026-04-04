@@ -5,6 +5,7 @@
 - Added non-raising `try_invalidate` and `try_clear_cache` helpers for operational cache management.
 - Added `Config#ttl_resolver` for per-route and per-cache-key TTL selection, with `nil` falling back to `expires_in`.
 - Added optional `Config#max_ttl` to clamp resolved and fallback TTL values to a configured upper bound.
+- Added opt-in, process-local cache stampede protection via `collapse_concurrent_misses`.
 - Added fail-fast validation to reject non-positive `expires_in` values.
 - Added validation to reject zero and negative resolved TTL values.
 - Added validation to reject non-positive `max_ttl` values.
