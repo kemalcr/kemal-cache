@@ -1,5 +1,8 @@
 # Unreleased
 
+- Added fail-open handler behavior for store `get`, `set`, and corrupt-payload `delete` errors so cache backend failures do not break otherwise successful requests.
+- Added observable `StoreError` events and `stats.store_errors` counters for cache backend failures.
+- Added non-raising `try_invalidate` and `try_clear_cache` helpers for operational cache management.
 - Added `Config#ttl_resolver` for per-route and per-cache-key TTL selection, with `nil` falling back to `expires_in`.
 - Added validation to reject non-positive resolved TTL values.
 
