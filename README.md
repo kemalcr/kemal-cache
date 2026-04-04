@@ -67,6 +67,21 @@ dependencies:
 - safe fallback behavior when cached payloads are corrupt
 - deployment flexibility from single-process apps to multi-instance Redis-backed setups
 
+## Benchmarks
+
+Numbers from [kemal-cache-benchmark](https://github.com/sdogruyol/kemal-cache-benchmark) (same app with vs without `kemal-cache`; see that repo for hardware, `wrk` commands, and full output).
+
+- **Lighter route:** **~1.6×** throughput, **~34%** lower average latency
+- **Heavier route:** **~5.7×** throughput, **~82%** lower average latency
+
+```mermaid
+xychart-beta
+    title "Throughput vs uncached (higher is better)"
+    x-axis ["Lighter route", "Heavier route"]
+    y-axis "multiplier" 0 --> 6
+    bar [1.6, 5.7]
+```
+
 ## Quick Start
 
 Add the shard to `shard.yml`:
