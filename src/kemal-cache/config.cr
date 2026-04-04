@@ -4,7 +4,7 @@ module Kemal::Cache
     DEFAULT_MAX_BODY_BYTES         = 1_048_576
     alias TTLResolver = Proc(HTTP::Server::Context, String, Time::Span?)
 
-    property expires_in : Time::Span
+    getter expires_in : Time::Span
     property store : Store
     property enabled : Bool
     property key_generator : Proc(HTTP::Server::Context, String)?
@@ -41,6 +41,10 @@ module Kemal::Cache
       cacheable_status_codes : Array(Int32)? = DEFAULT_CACHEABLE_STATUS_CODES,
     )
       @ttl_resolver = ttl_resolver
+      if @expires_in <= 0.seconds
+        raise ArgumentError.new("expires_in must be positive")
+      end
+
       if max_ttl && max_ttl <= 0.seconds
         raise ArgumentError.new("max_ttl must be positive")
       end
@@ -56,6 +60,12 @@ module Kemal::Cache
 
     def storage_type=(store : Store) : Store
       @store = store
+    end
+
+    def expires_in=(ttl : Time::Span) : Time::Span
+      raise ArgumentError.new("expires_in must be positive") unless ttl > 0.seconds
+
+      @expires_in = ttl
     end
 
     def cacheable_methods=(methods : Array(String)) : Array(String)
@@ -92,7 +102,7 @@ module Kemal::Cache
         ttl = max_ttl if ttl > max_ttl
       end
 
-      raise ArgumentError.new("TTL must be positive") unless ttl > 0.seconds
+      raise ArgumentError.new("resolved TTL must be positive") unless ttl > 0.seconds
 
       ttl
     end

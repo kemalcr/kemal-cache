@@ -1103,8 +1103,38 @@ describe Kemal::Cache::Handler do
       end
     end
 
-    expect_raises(ArgumentError, "TTL must be positive") do
+    expect_raises(ArgumentError, "resolved TTL must be positive") do
       get "/invalid-ttl"
+    end
+  end
+
+  it "raises when the resolved ttl is negative" do
+    config = Kemal::Cache::Config.new(
+      ttl_resolver: ->(_context : HTTP::Server::Context, _key : String) : Time::Span? { -5.seconds }
+    )
+
+    mount_cache(config) do
+      get "/negative-ttl" do
+        "negative"
+      end
+    end
+
+    expect_raises(ArgumentError, "resolved TTL must be positive") do
+      get "/negative-ttl"
+    end
+  end
+
+  it "raises when expires_in is not positive" do
+    expect_raises(ArgumentError, "expires_in must be positive") do
+      Kemal::Cache::Config.new(expires_in: 0.seconds)
+    end
+  end
+
+  it "raises when expires_in is set to a non-positive value" do
+    config = Kemal::Cache::Config.new
+
+    expect_raises(ArgumentError, "expires_in must be positive") do
+      config.expires_in = 0.seconds
     end
   end
 
