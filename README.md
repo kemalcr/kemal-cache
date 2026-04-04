@@ -217,9 +217,12 @@ Returning `nil` falls back to `expires_in`.
 
 When `max_ttl` is set, both `ttl_resolver` results and the `expires_in` fallback are clamped to that maximum.
 
-Resolved TTL values must be positive.
+Invalid TTL behavior is fail-fast:
 
-`max_ttl`, when set, must also be positive.
+- `expires_in` must be positive
+- `max_ttl`, when set, must be positive
+- `ttl_resolver` may return `nil` or a positive TTL
+- zero or negative resolved TTL values raise `ArgumentError`
 
 ### Methods And Status Codes
 
