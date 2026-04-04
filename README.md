@@ -2,12 +2,48 @@
 
 [![CI](https://github.com/kemalcr/kemal-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/kemalcr/kemal-cache/actions/workflows/ci.yml)
 
+[Changelog](CHANGELOG.md) · [License](LICENSE) (MIT)
+
 ## Powerful Caching For Kemal Applications
 
 `kemal-cache` is production-oriented response caching middleware for [Kemal](https://kemalcr.com/).
 It is built for teams that want lower response times, less repeated work, and safer HTTP caching behavior without bolting on a large framework.
 
 Use it when your application serves expensive pages, API responses, catalog endpoints, content feeds, or read-heavy routes that should be fast on repeat requests.
+
+## Table Of Contents
+
+- [Requirements](#requirements)
+- [Why `kemal-cache`](#why-kemal-cache)
+- [What You Get](#what-you-get)
+- [Quick Start](#quick-start)
+- [Out-Of-The-Box Behavior](#out-of-the-box-behavior)
+- [Installation Notes](#installation-notes)
+- [Common Use Cases](#common-use-cases)
+- [Configuration](#configuration)
+- [Stores](#stores)
+- [Invalidation](#invalidation)
+- [Observability](#observability)
+- [Operational Notes](#operational-notes)
+- [How It Works](#how-it-works)
+- [Troubleshooting](#troubleshooting)
+- [Documentation](#documentation)
+- [Development](#development)
+
+## Requirements
+
+- **Crystal** `>= 1.19.1` (see [`shard.yml`](shard.yml))
+- **Kemal** `>= 1.10.0` — your app must depend on [Kemal](https://kemalcr.com/); `kemal-cache` is middleware for Kemal routes
+- **Redis** (optional) — only if you use `Kemal::Cache::RedisStore`; add the [`redis`](https://github.com/jgaskins/redis) shard and `require "kemal-cache/redis"`
+
+Pin a release in `shard.yml` when you want stable upgrades:
+
+```yaml
+dependencies:
+  kemal-cache:
+    github: kemalcr/kemal-cache
+    version: ~> 1.2.0
+```
 
 ## Why `kemal-cache`
 
@@ -49,12 +85,13 @@ Install dependencies:
 shards install
 ```
 
-Then add the middleware:
+Then add the middleware. Use an explicit `Kemal::Cache::Config` instance when you will need the same config later for [invalidation](#invalidation), [stats](#observability), or [events](#observability):
 
 ```crystal
 require "kemal-cache"
 
-use Kemal::Cache::Handler.new
+config = Kemal::Cache::Config.new
+use Kemal::Cache::Handler.new(config)
 
 get "/articles" do
   "Expensive response"
@@ -107,7 +144,7 @@ This keeps the base package lean for applications that only need in-process cach
 
 ## Common Use Cases
 
-### Cache expensive HTML pages
+### Cache Expensive HTML Pages
 
 ```crystal
 require "kemal-cache"
@@ -119,7 +156,7 @@ get "/pricing" do
 end
 ```
 
-### Cache API responses with a custom TTL
+### Cache API Responses With A Custom TTL
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -133,7 +170,7 @@ get "/api/products" do
 end
 ```
 
-### Share cache across multiple app instances with Redis
+### Share Cache Across Multiple App Instances With Redis
 
 ```crystal
 require "kemal-cache/redis"
@@ -530,6 +567,26 @@ On a cache hit, it restores the cached body, status, and response headers withou
 
 For safer defaults, the middleware bypasses authenticated and cookie-bearing requests and refuses to store responses that explicitly opt out of caching.
 
+## Troubleshooting
+
+**Nothing is cached.** Confirm the request is `GET` (unless you changed `cacheable_methods`), the response status is allowed (`2xx` by default), and the request is not skipped by default rules: `Authorization` or `Cookie` on the request, `Set-Cookie` or restrictive `Cache-Control` / `Vary` on the response. See [Out-Of-The-Box Behavior](#out-of-the-box-behavior).
+
+**Invalidation has no effect.** The string passed to `invalidate` must match the stored cache key — usually `context.request.resource` (path and query). If you use `key_generator`, compute the same key for invalidation.
+
+**Redis errors without broken responses.** Backend failures are fail-open: the request still completes. Monitor `StoreError` in `on_event` and `stats.store_errors` — see [Observability](#observability).
+
+**Redis specs fail locally.** Start Redis and set `REDIS_URL` — see [Development](#development).
+
+## Documentation
+
+Generate HTML API docs from doc comments:
+
+```bash
+crystal doc
+```
+
+Open `docs/index.html`. In an app that depends on this shard, run `crystal doc` in your project after `shards install` so `kemal-cache` types are included.
+
 ## Development
 
 ```bash
@@ -543,6 +600,10 @@ To run the real Redis integration spec locally, start Redis and set `REDIS_URL`:
 ```bash
 REDIS_URL=redis://localhost:6379/0 crystal spec
 ```
+
+## License
+
+This project is released under the [MIT License](LICENSE).
 
 ## Contributing
 
