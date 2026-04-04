@@ -399,6 +399,12 @@ config = Kemal::Cache::Config.new
 config.invalidate("/articles?page=2")
 ```
 
+Use `try_invalidate` when you want a non-raising result:
+
+```crystal
+removed = config.try_invalidate("/articles?page=2")
+```
+
 Invalidate directly from a request context when the key depends on request data:
 
 ```crystal
@@ -408,10 +414,24 @@ post "/articles/cache/invalidate" do |env|
 end
 ```
 
+You can also use the non-raising variant from a request context:
+
+```crystal
+post "/articles/cache/invalidate" do |env|
+  env.response.status_code = config.try_invalidate(env) ? 204 : 503
+end
+```
+
 Purge the configured store:
 
 ```crystal
 config.clear_cache
+```
+
+Use `try_clear_cache` when cache backend failures should be handled without raising:
+
+```crystal
+cleared = config.try_clear_cache
 ```
 
 ## Observability
@@ -423,6 +443,7 @@ config.stats.hits
 config.stats.misses
 config.stats.cacheable_requests
 config.stats.stores
+config.stats.store_errors
 config.stats.bypasses
 config.stats.not_modified
 config.stats.invalidations
@@ -457,6 +478,7 @@ Available event types:
 - `Hit`
 - `Miss`
 - `Store`
+- `StoreError`
 - `Bypass`
 - `NotModified`
 - `Invalidate`
@@ -470,6 +492,7 @@ Common bypass details include `disabled`, `method_not_cacheable`, `skip_if`, `au
 - Use `RedisStore` when multiple instances should share cached responses.
 - `clear_cache` only clears the configured store namespace.
 - Corrupt cached payloads are discarded automatically and retried as cache misses.
+- Store `get`, `set`, and corrupt-payload `delete` errors fail open at the middleware layer and are emitted as `StoreError` events.
 - Upstream middleware headers are preserved unless the cached response intentionally replaces the same header name.
 
 ## How It Works
