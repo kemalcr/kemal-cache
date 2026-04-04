@@ -98,7 +98,8 @@ module Kemal::Cache
       ).to_json
 
       if should_store
-        @config.store.set(key, payload, @config.expires_in)
+        ttl = @config.resolve_ttl(context, key)
+        @config.store.set(key, payload, ttl)
         @config.observe(EventType::Store, key: key, context: context)
       end
 

@@ -2,6 +2,7 @@ module Kemal::Cache
   class Config
     DEFAULT_CACHEABLE_STATUS_CODES = (200..299).to_a
     DEFAULT_MAX_BODY_BYTES         = 1_048_576
+    alias TTLResolver = Proc(HTTP::Server::Context, String, Time::Span?)
 
     property expires_in : Time::Span
     property store : Store
@@ -24,6 +25,7 @@ module Kemal::Cache
       @store : Store = MemoryStore.new,
       @enabled : Bool = true,
       @key_generator : Proc(HTTP::Server::Context, String)? = nil,
+      ttl_resolver : TTLResolver? = nil,
       @skip_if : Proc(HTTP::Server::Context, Bool)? = nil,
       @should_cache : Proc(HTTP::Server::Context, Bool)? = nil,
       @max_body_bytes : Int32? = DEFAULT_MAX_BODY_BYTES,
@@ -36,6 +38,7 @@ module Kemal::Cache
       cacheable_methods : Array(String) = ["GET"],
       cacheable_status_codes : Array(Int32)? = DEFAULT_CACHEABLE_STATUS_CODES,
     )
+      @ttl_resolver = ttl_resolver
       @cacheable_methods = cacheable_methods.map(&.upcase).uniq
       @cacheable_status_codes = cacheable_status_codes.try(&.uniq)
     end
@@ -58,6 +61,21 @@ module Kemal::Cache
 
     def cache_key(context : HTTP::Server::Context) : String
       @key_generator.try(&.call(context)) || context.request.resource
+    end
+
+    def ttl_resolver : TTLResolver?
+      @ttl_resolver
+    end
+
+    def ttl_resolver=(resolver : TTLResolver?) : TTLResolver?
+      @ttl_resolver = resolver
+    end
+
+    def resolve_ttl(context : HTTP::Server::Context, key : String) : Time::Span
+      ttl = @ttl_resolver.try(&.call(context, key)) || @expires_in
+      raise ArgumentError.new("TTL must be positive") unless ttl > 0.seconds
+
+      ttl
     end
 
     def invalidate(key : String) : Nil

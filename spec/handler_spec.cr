@@ -856,6 +856,89 @@ describe Kemal::Cache::Handler do
     store.last_value.should_not be_nil
   end
 
+  it "supports per-route ttl selection" do
+    store = RecordingStore.new
+    config = Kemal::Cache::Config.new(
+      expires_in: 15.seconds,
+      store: store,
+      ttl_resolver: ->(context : HTTP::Server::Context, key : String) : Time::Span? do
+        if context.request.path == "/fast-expiring"
+          5.seconds
+        else
+          1.minute
+        end
+      end
+    )
+
+    mount_cache(config) do
+      get "/fast-expiring" do
+        "fast"
+      end
+
+      get "/slow-expiring" do
+        "slow"
+      end
+    end
+
+    get "/fast-expiring"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    store.last_key.should eq "/fast-expiring"
+    store.last_ttl.should eq 5.seconds
+
+    get "/slow-expiring"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    store.last_key.should eq "/slow-expiring"
+    store.last_ttl.should eq 1.minute
+  end
+
+  it "supports per-key ttl selection with custom cache keys" do
+    store = RecordingStore.new
+    config = Kemal::Cache::Config.new(
+      expires_in: 2.minutes,
+      store: store,
+      key_generator: ->(context : HTTP::Server::Context) { context.request.path },
+      ttl_resolver: ->(_context : HTTP::Server::Context, key : String) : Time::Span? do
+        key == "/ttl-articles" ? 30.seconds : nil
+      end
+    )
+
+    mount_cache(config) do
+      get "/ttl-articles" do
+        "articles"
+      end
+
+      get "/ttl-feeds" do
+        "feeds"
+      end
+    end
+
+    get "/ttl-articles?page=1"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    store.last_key.should eq "/ttl-articles"
+    store.last_ttl.should eq 30.seconds
+
+    get "/ttl-feeds?page=1"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    store.last_key.should eq "/ttl-feeds"
+    store.last_ttl.should eq 2.minutes
+  end
+
+  it "raises when the resolved ttl is not positive" do
+    config = Kemal::Cache::Config.new(
+      ttl_resolver: ->(_context : HTTP::Server::Context, _key : String) : Time::Span? { 0.seconds }
+    )
+
+    mount_cache(config) do
+      get "/invalid-ttl" do
+        "invalid"
+      end
+    end
+
+    expect_raises(ArgumentError, "TTL must be positive") do
+      get "/invalid-ttl"
+    end
+  end
+
   it "invalidates corrupt cached payloads and falls back to a miss" do
     store = RecordingStore.new
     store.prime("/corrupt", %({"status_code":"oops"}))
