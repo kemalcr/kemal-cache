@@ -2,8 +2,6 @@
 
 [![CI](https://github.com/kemalcr/kemal-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/kemalcr/kemal-cache/actions/workflows/ci.yml)
 
-[Changelog](CHANGELOG.md) · [License](LICENSE) (MIT)
-
 ## Powerful Caching For Kemal Applications
 
 `kemal-cache` is production-oriented response caching middleware for [Kemal](https://kemalcr.com/).
