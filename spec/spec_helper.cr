@@ -62,6 +62,45 @@ class RecordingStore < Kemal::Cache::Store
   end
 end
 
+class FailingStore < Kemal::Cache::Store
+  property fail_get = false
+  property fail_set = false
+  property fail_delete = false
+  property fail_clear = false
+
+  def initialize
+    @entries = {} of String => String
+  end
+
+  def get(key : String) : String?
+    raise "store get failure" if @fail_get
+
+    @entries[key]?
+  end
+
+  def set(key : String, value : String, ttl : Time::Span) : Nil
+    raise "store set failure" if @fail_set
+
+    @entries[key] = value
+  end
+
+  def prime(key : String, value : String) : Nil
+    @entries[key] = value
+  end
+
+  def delete(key : String) : Nil
+    raise "store delete failure" if @fail_delete
+
+    @entries.delete(key)
+  end
+
+  def clear : Nil
+    raise "store clear failure" if @fail_clear
+
+    @entries.clear
+  end
+end
+
 def mount_cache(config : Kemal::Cache::Config = Kemal::Cache::Config.new, &)
   use Kemal::Cache::Handler.new(config)
   yield

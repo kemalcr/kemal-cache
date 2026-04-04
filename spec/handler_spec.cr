@@ -342,6 +342,43 @@ describe Kemal::Cache::Handler do
     state.calls.should eq 2
   end
 
+  it "supports non-raising invalidation by explicit key" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new
+
+    mount_cache(config) do
+      get "/try-invalidate-key" do
+        state.calls += 1
+        "key #{state.calls}"
+      end
+    end
+
+    get "/try-invalidate-key"
+    get "/try-invalidate-key"
+    config.try_invalidate("/try-invalidate-key").should be_true
+
+    get "/try-invalidate-key"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "key 2"
+    config.stats.invalidations.should eq 1
+  end
+
+  it "returns false when non-raising invalidation by explicit key fails" do
+    store = FailingStore.new
+    store.fail_delete = true
+    events = [] of Kemal::Cache::Event
+    config = Kemal::Cache::Config.new(
+      store: store,
+      on_event: ->(event : Kemal::Cache::Event) { events << event }
+    )
+
+    config.try_invalidate("/try-invalidate-error").should be_false
+    config.stats.invalidations.should eq 0
+    config.stats.store_errors.should eq 1
+    events.last.type.should eq(Kemal::Cache::EventType::StoreError)
+    events.last.detail.should eq("delete:Exception")
+  end
+
   it "invalidates cached entries from the current context" do
     state = RequestState.new
     config = Kemal::Cache::Config.new(
@@ -381,6 +418,41 @@ describe Kemal::Cache::Handler do
     state.calls.should eq 2
   end
 
+  it "supports non-raising invalidation from the current context" do
+    state = RequestState.new
+    invalidated = false
+    config = Kemal::Cache::Config.new(
+      key_generator: ->(context : HTTP::Server::Context) { context.request.path },
+      skip_if: ->(context : HTTP::Server::Context) do
+        context.request.query_params["invalidate"]? == "true"
+      end
+    )
+
+    mount_cache(config) do
+      get "/try-invalidate-context" do |env|
+        if env.request.query_params["invalidate"]? == "true"
+          invalidated = config.try_invalidate(env)
+          "invalidated"
+        else
+          state.calls += 1
+          "context #{state.calls}"
+        end
+      end
+    end
+
+    get "/try-invalidate-context"
+    get "/try-invalidate-context"
+    get "/try-invalidate-context?invalidate=true"
+
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "invalidated"
+    invalidated.should be_true
+
+    get "/try-invalidate-context"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "context 2"
+  end
+
   it "clears all cached entries through the config" do
     state = RequestState.new
     config = Kemal::Cache::Config.new
@@ -406,6 +478,43 @@ describe Kemal::Cache::Handler do
     response.headers["X-Kemal-Cache"].should eq "MISS"
     response.body.should eq "clear 2"
     state.calls.should eq 2
+  end
+
+  it "supports non-raising cache clearing" do
+    state = RequestState.new
+    config = Kemal::Cache::Config.new
+
+    mount_cache(config) do
+      get "/try-clear-cache" do
+        state.calls += 1
+        "clear #{state.calls}"
+      end
+    end
+
+    get "/try-clear-cache"
+    get "/try-clear-cache"
+    config.try_clear_cache.should be_true
+
+    get "/try-clear-cache"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "clear 2"
+    config.stats.clears.should eq 1
+  end
+
+  it "returns false when non-raising cache clearing fails" do
+    store = FailingStore.new
+    store.fail_clear = true
+    events = [] of Kemal::Cache::Event
+    config = Kemal::Cache::Config.new(
+      store: store,
+      on_event: ->(event : Kemal::Cache::Event) { events << event }
+    )
+
+    config.try_clear_cache.should be_false
+    config.stats.clears.should eq 0
+    config.stats.store_errors.should eq 1
+    events.last.type.should eq(Kemal::Cache::EventType::StoreError)
+    events.last.detail.should eq("clear:Exception")
   end
 
   it "does not persist responses larger than the configured body limit" do
@@ -939,6 +1048,73 @@ describe Kemal::Cache::Handler do
     end
   end
 
+  it "fails open when store reads raise errors" do
+    store = FailingStore.new
+    store.fail_get = true
+    events = [] of Kemal::Cache::Event
+    config = Kemal::Cache::Config.new(
+      store: store,
+      on_event: ->(event : Kemal::Cache::Event) { events << event }
+    )
+    state = RequestState.new
+
+    mount_cache(config) do
+      get "/store-get-error" do
+        state.calls += 1
+        "read #{state.calls}"
+      end
+    end
+
+    get "/store-get-error"
+    response.status_code.should eq 200
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "read 1"
+
+    get "/store-get-error"
+    response.status_code.should eq 200
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "read 2"
+
+    state.calls.should eq 2
+    config.stats.store_errors.should eq 2
+    events.select(&.type.==(Kemal::Cache::EventType::StoreError)).size.should eq 2
+    events.select(&.type.==(Kemal::Cache::EventType::StoreError)).first.detail.should eq("get:Exception")
+  end
+
+  it "fails open when store writes raise errors" do
+    store = FailingStore.new
+    store.fail_set = true
+    events = [] of Kemal::Cache::Event
+    config = Kemal::Cache::Config.new(
+      store: store,
+      on_event: ->(event : Kemal::Cache::Event) { events << event }
+    )
+    state = RequestState.new
+
+    mount_cache(config) do
+      get "/store-set-error" do
+        state.calls += 1
+        "write #{state.calls}"
+      end
+    end
+
+    get "/store-set-error"
+    response.status_code.should eq 200
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "write 1"
+
+    get "/store-set-error"
+    response.status_code.should eq 200
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "write 2"
+
+    state.calls.should eq 2
+    config.stats.stores.should eq 0
+    config.stats.store_errors.should eq 2
+    events.select(&.type.==(Kemal::Cache::EventType::StoreError)).size.should eq 2
+    events.select(&.type.==(Kemal::Cache::EventType::StoreError)).first.detail.should eq("set:Exception")
+  end
+
   it "invalidates corrupt cached payloads and falls back to a miss" do
     store = RecordingStore.new
     store.prime("/corrupt", %({"status_code":"oops"}))
@@ -961,6 +1137,35 @@ describe Kemal::Cache::Handler do
     response.headers["X-Kemal-Cache"].should eq "HIT"
     response.body.should eq "corrupt 1"
     state.calls.should eq 1
+  end
+
+  it "fails open when deleting a corrupt cached payload raises an error" do
+    store = FailingStore.new
+    store.prime("/corrupt-delete", %({"status_code":"oops"}))
+    store.fail_delete = true
+    events = [] of Kemal::Cache::Event
+    config = Kemal::Cache::Config.new(
+      store: store,
+      on_event: ->(event : Kemal::Cache::Event) { events << event }
+    )
+    state = RequestState.new
+
+    mount_cache(config) do
+      get "/corrupt-delete" do
+        state.calls += 1
+        "fallback #{state.calls}"
+      end
+    end
+
+    get "/corrupt-delete"
+    response.status_code.should eq 200
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    response.body.should eq "fallback 1"
+
+    config.stats.store_errors.should eq 1
+    config.stats.invalidations.should eq 0
+    events.last.type.should eq(Kemal::Cache::EventType::Miss)
+    events.select(&.type.==(Kemal::Cache::EventType::StoreError)).first.detail.should eq("delete:corrupt_payload:Exception")
   end
 
   it "does not persist disallowed status codes" do

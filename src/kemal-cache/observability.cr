@@ -3,6 +3,7 @@ module Kemal::Cache
     Hit
     Miss
     Store
+    StoreError
     Bypass
     NotModified
     Invalidate
@@ -32,6 +33,7 @@ module Kemal::Cache
     @hits = Atomic(Int64).new(0_i64)
     @misses = Atomic(Int64).new(0_i64)
     @stores = Atomic(Int64).new(0_i64)
+    @store_errors = Atomic(Int64).new(0_i64)
     @bypasses = Atomic(Int64).new(0_i64)
     @not_modified = Atomic(Int64).new(0_i64)
     @invalidations = Atomic(Int64).new(0_i64)
@@ -45,6 +47,8 @@ module Kemal::Cache
         @misses.add(1_i64)
       when EventType::Store
         @stores.add(1_i64)
+      when EventType::StoreError
+        @store_errors.add(1_i64)
       when EventType::Bypass
         @bypasses.add(1_i64)
       when EventType::NotModified
@@ -66,6 +70,10 @@ module Kemal::Cache
 
     def stores : Int64
       @stores.get
+    end
+
+    def store_errors : Int64
+      @store_errors.get
     end
 
     def bypasses : Int64

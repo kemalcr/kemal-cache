@@ -83,15 +83,43 @@ module Kemal::Cache
       observe(EventType::Invalidate, key: key)
     end
 
+    def try_invalidate(key : String) : Bool
+      @store.delete(key)
+      observe(EventType::Invalidate, key: key)
+      true
+    rescue error
+      observe_store_error("delete", key: key, error: error)
+      false
+    end
+
     def invalidate(context : HTTP::Server::Context) : Nil
       key = cache_key(context)
       @store.delete(key)
       observe(EventType::Invalidate, key: key, context: context)
     end
 
+    def try_invalidate(context : HTTP::Server::Context) : Bool
+      key = cache_key(context)
+      @store.delete(key)
+      observe(EventType::Invalidate, key: key, context: context)
+      true
+    rescue error
+      observe_store_error("delete", key: key, context: context, error: error)
+      false
+    end
+
     def clear_cache : Nil
       @store.clear
       observe(EventType::Clear)
+    end
+
+    def try_clear_cache : Bool
+      @store.clear
+      observe(EventType::Clear)
+      true
+    rescue error
+      observe_store_error("clear", error: error)
+      false
     end
 
     def cacheable_method?(method : String) : Bool
@@ -131,6 +159,15 @@ module Kemal::Cache
         status_code: status_code || context.try(&.response.status_code),
         detail: detail,
       )))
+    end
+
+    private def observe_store_error(operation : String, *, key : String? = nil, context : HTTP::Server::Context? = nil, error : Exception) : Nil
+      observe(
+        EventType::StoreError,
+        key: key,
+        context: context,
+        detail: "#{operation}:#{error.class.name}"
+      )
     end
   end
 end

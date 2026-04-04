@@ -15,7 +15,7 @@ module Kemal::Cache
 
       key = cache_key(context)
 
-      if payload = @config.store.get(key)
+      if payload = safe_store_get(key, context)
         if cached_response = deserialize_cached_response(payload, key, context)
           write_hit(context, key, cached_response)
           return
@@ -48,8 +48,7 @@ module Kemal::Cache
     private def deserialize_cached_response(payload : String, key : String, context : HTTP::Server::Context) : CachedResponse?
       CachedResponse.from_json(payload)
     rescue error : JSON::ParseException | TypeCastError
-      @config.store.delete(key)
-      @config.observe(EventType::Invalidate, key: key, context: context, detail: "corrupt_payload")
+      safe_store_delete(key, context, "corrupt_payload")
       nil
     end
 
@@ -99,8 +98,7 @@ module Kemal::Cache
 
       if should_store
         ttl = @config.resolve_ttl(context, key)
-        @config.store.set(key, payload, ttl)
-        @config.observe(EventType::Store, key: key, context: context)
+        safe_store_set(key, payload, ttl, context)
       end
 
       context.response.output = original_output
@@ -109,6 +107,37 @@ module Kemal::Cache
       context.response.print body
     ensure
       context.response.output = original_output.not_nil!
+    end
+
+    private def safe_store_get(key : String, context : HTTP::Server::Context) : String?
+      @config.store.get(key)
+    rescue error
+      observe_store_error("get", key, context, error)
+      nil
+    end
+
+    private def safe_store_set(key : String, payload : String, ttl : Time::Span, context : HTTP::Server::Context) : Nil
+      @config.store.set(key, payload, ttl)
+      @config.observe(EventType::Store, key: key, context: context)
+    rescue error
+      observe_store_error("set", key, context, error)
+    end
+
+    private def safe_store_delete(key : String, context : HTTP::Server::Context, detail : String) : Nil
+      @config.store.delete(key)
+      @config.observe(EventType::Invalidate, key: key, context: context, detail: detail)
+    rescue error
+      observe_store_error("delete", key, context, error, detail)
+    end
+
+    private def observe_store_error(operation : String, key : String, context : HTTP::Server::Context, error : Exception, detail : String? = nil) : Nil
+      suffix = detail ? ":#{detail}" : ""
+      @config.observe(
+        EventType::StoreError,
+        key: key,
+        context: context,
+        detail: "#{operation}#{suffix}:#{error.class.name}"
+      )
     end
 
     private def restore_headers(headers : HTTP::Headers, cached_headers : Hash(String, Array(String))) : Nil
