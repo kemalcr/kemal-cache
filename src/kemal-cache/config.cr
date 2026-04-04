@@ -9,6 +9,7 @@ module Kemal::Cache
     property enabled : Bool
     property key_generator : Proc(HTTP::Server::Context, String)?
     getter max_ttl : Time::Span?
+    property collapse_concurrent_misses : Bool
     property skip_if : Proc(HTTP::Server::Context, Bool)?
     property should_cache : Proc(HTTP::Server::Context, Bool)?
     property max_body_bytes : Int32?
@@ -28,6 +29,7 @@ module Kemal::Cache
       @key_generator : Proc(HTTP::Server::Context, String)? = nil,
       ttl_resolver : TTLResolver? = nil,
       max_ttl : Time::Span? = nil,
+      @collapse_concurrent_misses : Bool = false,
       @skip_if : Proc(HTTP::Server::Context, Bool)? = nil,
       @should_cache : Proc(HTTP::Server::Context, Bool)? = nil,
       @max_body_bytes : Int32? = DEFAULT_MAX_BODY_BYTES,

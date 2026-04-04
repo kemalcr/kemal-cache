@@ -6,6 +6,7 @@ module Kemal::Cache
     getter config : Config
 
     def initialize(@config : Config = Config.new)
+      @request_collapser = RequestCollapser.new
     end
 
     def call(context : HTTP::Server::Context)
@@ -14,15 +15,11 @@ module Kemal::Cache
       end
 
       key = cache_key(context)
-
-      if payload = safe_store_get(key, context)
-        if cached_response = deserialize_cached_response(payload, key, context)
-          write_hit(context, key, cached_response)
-          return
-        end
+      if @config.collapse_concurrent_misses
+        call_with_request_collapsing(context, key)
+      else
+        write_cached_response_or_miss(context, key)
       end
-
-      write_miss(context, key)
     end
 
     private def request_bypass_reason(context : HTTP::Server::Context) : String?
@@ -109,6 +106,43 @@ module Kemal::Cache
       context.response.output = original_output.not_nil!
     end
 
+    private def write_cached_response_or_miss(context : HTTP::Server::Context, key : String) : Nil
+      return if write_hit_if_present(context, key)
+
+      write_miss(context, key)
+    end
+
+    private def write_hit_if_present(context : HTTP::Server::Context, key : String) : Bool
+      if payload = safe_store_get(key, context)
+        if cached_response = deserialize_cached_response(payload, key, context)
+          write_hit(context, key, cached_response)
+          return true
+        end
+      end
+
+      false
+    end
+
+    private def call_with_request_collapsing(context : HTTP::Server::Context, key : String) : Nil
+      loop do
+        return if write_hit_if_present(context, key)
+
+        claim = @request_collapser.claim(key)
+        if claim.owner?
+          begin
+            return if write_hit_if_present(context, key)
+
+            write_miss(context, key)
+            return
+          ensure
+            @request_collapser.release(key)
+          end
+        else
+          claim.wait
+        end
+      end
+    end
+
     private def safe_store_get(key : String, context : HTTP::Server::Context) : String?
       @config.store.get(key)
     rescue error
@@ -138,6 +172,49 @@ module Kemal::Cache
         context: context,
         detail: "#{operation}#{suffix}:#{error.class.name}"
       )
+    end
+
+    private class RequestCollapser
+      private struct Claim
+        getter owner : Bool
+
+        def initialize(@owner : Bool, @channel : Channel(Nil)? = nil)
+        end
+
+        def owner? : Bool
+          @owner
+        end
+
+        def wait : Nil
+          @channel.not_nil!.receive unless @owner
+        end
+      end
+
+      def initialize
+        @mutex = Mutex.new
+        @waiters = {} of String => Array(Channel(Nil))
+      end
+
+      def claim(key : String) : Claim
+        @mutex.synchronize do
+          if waiters = @waiters[key]?
+            channel = Channel(Nil).new
+            waiters << channel
+            Claim.new(false, channel)
+          else
+            @waiters[key] = [] of Channel(Nil)
+            Claim.new(true)
+          end
+        end
+      end
+
+      def release(key : String) : Nil
+        waiters = @mutex.synchronize do
+          @waiters.delete(key) || [] of Channel(Nil)
+        end
+
+        waiters.each(&.send(nil))
+      end
     end
 
     private def restore_headers(headers : HTTP::Headers, cached_headers : Hash(String, Array(String))) : Nil

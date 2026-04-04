@@ -895,6 +895,69 @@ describe Kemal::Cache::Handler do
     state.calls.should eq 1
   end
 
+  it "does not collapse concurrent misses by default" do
+    cache_handler = Kemal::Cache::Handler.new
+    entered = Channel(Nil).new
+    release = Channel(Nil).new
+    origin = CoordinatedResponseHandler.new(entered, release, "default-collapse")
+    cache_handler.next = origin
+    responses = Channel(HTTP::Client::Response).new(2)
+
+    spawn do
+      responses.send(process_request(cache_handler, HTTP::Request.new("GET", "/default-collapse")))
+    end
+
+    entered.receive
+
+    spawn do
+      responses.send(process_request(cache_handler, HTTP::Request.new("GET", "/default-collapse")))
+    end
+
+    entered.receive
+    origin.calls.should eq 2
+
+    release.send(nil)
+    release.send(nil)
+
+    first = responses.receive
+    second = responses.receive
+
+    [first, second].map(&.headers["X-Kemal-Cache"]).sort.should eq(["MISS", "MISS"])
+    origin.calls.should eq 2
+  end
+
+  it "collapses concurrent misses for the same key when enabled" do
+    config = Kemal::Cache::Config.new(collapse_concurrent_misses: true)
+    cache_handler = Kemal::Cache::Handler.new(config)
+    entered = Channel(Nil).new
+    release = Channel(Nil).new
+    origin = CoordinatedResponseHandler.new(entered, release, "singleflight")
+    cache_handler.next = origin
+    responses = Channel(HTTP::Client::Response).new(2)
+
+    spawn do
+      responses.send(process_request(cache_handler, HTTP::Request.new("GET", "/singleflight")))
+    end
+
+    entered.receive
+
+    spawn do
+      responses.send(process_request(cache_handler, HTTP::Request.new("GET", "/singleflight")))
+    end
+
+    sleep 1.millisecond
+    origin.calls.should eq 1
+
+    release.send(nil)
+
+    first = responses.receive
+    second = responses.receive
+
+    [first, second].map(&.headers["X-Kemal-Cache"]).sort.should eq(["HIT", "MISS"])
+    [first.body, second.body].uniq.should eq(["singleflight"])
+    origin.calls.should eq 1
+  end
+
   it "expires cached responses using the configured ttl" do
     config = Kemal::Cache::Config.new(expires_in: 5.milliseconds)
     state = RequestState.new

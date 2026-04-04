@@ -29,6 +29,21 @@ class RequestHeaderHandler < Kemal::Handler
   end
 end
 
+class CoordinatedResponseHandler < Kemal::Handler
+  getter calls : Int32
+
+  def initialize(@entered : Channel(Nil), @release : Channel(Nil), @body : String)
+    @calls = 0
+  end
+
+  def call(context : HTTP::Server::Context)
+    @calls += 1
+    @entered.send(nil)
+    @release.receive
+    context.response.print @body
+  end
+end
+
 class RecordingStore < Kemal::Cache::Store
   getter last_key : String?
   getter last_value : String?
@@ -105,4 +120,14 @@ def mount_cache(config : Kemal::Cache::Config = Kemal::Cache::Config.new, &)
   use Kemal::Cache::Handler.new(config)
   yield
   Kemal.config.setup
+end
+
+def process_request(handler : HTTP::Handler, request : HTTP::Request) : HTTP::Client::Response
+  io = IO::Memory.new
+  response = HTTP::Server::Response.new(io)
+  context = HTTP::Server::Context.new(request, response)
+  handler.call(context)
+  response.close
+  io.rewind
+  HTTP::Client::Response.from_io(io, decompress: false)
 end
