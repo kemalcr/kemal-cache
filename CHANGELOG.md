@@ -1,3 +1,8 @@
+# Unreleased
+
+- Added `Config#ttl_resolver` for per-route and per-cache-key TTL selection, with `nil` falling back to `expires_in`.
+- Added validation to reject non-positive resolved TTL values.
+
 # 1.1.0 (03-04-2026)
 
 - Made Redis support opt-in via `require "kemal-cache/redis"` so the core middleware can be used without a runtime Redis dependency.
