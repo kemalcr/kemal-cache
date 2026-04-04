@@ -8,6 +8,7 @@ module Kemal::Cache
     property store : Store
     property enabled : Bool
     property key_generator : Proc(HTTP::Server::Context, String)?
+    getter max_ttl : Time::Span?
     property skip_if : Proc(HTTP::Server::Context, Bool)?
     property should_cache : Proc(HTTP::Server::Context, Bool)?
     property max_body_bytes : Int32?
@@ -26,6 +27,7 @@ module Kemal::Cache
       @enabled : Bool = true,
       @key_generator : Proc(HTTP::Server::Context, String)? = nil,
       ttl_resolver : TTLResolver? = nil,
+      max_ttl : Time::Span? = nil,
       @skip_if : Proc(HTTP::Server::Context, Bool)? = nil,
       @should_cache : Proc(HTTP::Server::Context, Bool)? = nil,
       @max_body_bytes : Int32? = DEFAULT_MAX_BODY_BYTES,
@@ -39,6 +41,11 @@ module Kemal::Cache
       cacheable_status_codes : Array(Int32)? = DEFAULT_CACHEABLE_STATUS_CODES,
     )
       @ttl_resolver = ttl_resolver
+      if max_ttl && max_ttl <= 0.seconds
+        raise ArgumentError.new("max_ttl must be positive")
+      end
+
+      @max_ttl = max_ttl
       @cacheable_methods = cacheable_methods.map(&.upcase).uniq
       @cacheable_status_codes = cacheable_status_codes.try(&.uniq)
     end
@@ -71,8 +78,20 @@ module Kemal::Cache
       @ttl_resolver = resolver
     end
 
+    def max_ttl=(ttl : Time::Span?) : Time::Span?
+      if ttl && ttl <= 0.seconds
+        raise ArgumentError.new("max_ttl must be positive")
+      end
+
+      @max_ttl = ttl
+    end
+
     def resolve_ttl(context : HTTP::Server::Context, key : String) : Time::Span
       ttl = @ttl_resolver.try(&.call(context, key)) || @expires_in
+      if max_ttl = @max_ttl
+        ttl = max_ttl if ttl > max_ttl
+      end
+
       raise ArgumentError.new("TTL must be positive") unless ttl > 0.seconds
 
       ttl

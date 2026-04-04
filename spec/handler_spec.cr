@@ -1000,6 +1000,66 @@ describe Kemal::Cache::Handler do
     store.last_ttl.should eq 1.minute
   end
 
+  it "clamps resolved ttl values to max_ttl" do
+    store = RecordingStore.new
+    config = Kemal::Cache::Config.new(
+      expires_in: 10.minutes,
+      max_ttl: 45.seconds,
+      store: store,
+      ttl_resolver: ->(_context : HTTP::Server::Context, _key : String) : Time::Span? { 2.minutes }
+    )
+
+    mount_cache(config) do
+      get "/ttl-clamped" do
+        "clamped"
+      end
+    end
+
+    get "/ttl-clamped"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    store.last_ttl.should eq 45.seconds
+  end
+
+  it "clamps fallback expires_in to max_ttl when resolver returns nil" do
+    store = RecordingStore.new
+    config = Kemal::Cache::Config.new(
+      expires_in: 2.minutes,
+      max_ttl: 30.seconds,
+      store: store,
+      ttl_resolver: ->(_context : HTTP::Server::Context, _key : String) : Time::Span? { nil }
+    )
+
+    mount_cache(config) do
+      get "/ttl-fallback-clamped" do
+        "fallback"
+      end
+    end
+
+    get "/ttl-fallback-clamped"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    store.last_ttl.should eq 30.seconds
+  end
+
+  it "keeps lower resolved ttl values below max_ttl unchanged" do
+    store = RecordingStore.new
+    config = Kemal::Cache::Config.new(
+      expires_in: 2.minutes,
+      max_ttl: 1.minute,
+      store: store,
+      ttl_resolver: ->(_context : HTTP::Server::Context, _key : String) : Time::Span? { 20.seconds }
+    )
+
+    mount_cache(config) do
+      get "/ttl-not-clamped" do
+        "not-clamped"
+      end
+    end
+
+    get "/ttl-not-clamped"
+    response.headers["X-Kemal-Cache"].should eq "MISS"
+    store.last_ttl.should eq 20.seconds
+  end
+
   it "supports per-key ttl selection with custom cache keys" do
     store = RecordingStore.new
     config = Kemal::Cache::Config.new(
@@ -1045,6 +1105,12 @@ describe Kemal::Cache::Handler do
 
     expect_raises(ArgumentError, "TTL must be positive") do
       get "/invalid-ttl"
+    end
+  end
+
+  it "raises when max_ttl is not positive" do
+    expect_raises(ArgumentError, "max_ttl must be positive") do
+      Kemal::Cache::Config.new(max_ttl: 0.seconds)
     end
   end
 
