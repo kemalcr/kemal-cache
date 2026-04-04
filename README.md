@@ -15,6 +15,7 @@ Use it when your application serves expensive pages, API responses, catalog endp
 - safe-by-default behavior for authenticated, cookie-bearing, and private responses
 - in-memory and Redis-backed stores
 - custom cache keys, filters, invalidation, and TTL policies
+- optional per-process cache stampede protection
 - automatic `ETag` and `Last-Modified` generation
 - conditional request support with `304 Not Modified`
 - built-in counters and event hooks for observability
@@ -154,6 +155,7 @@ config = Kemal::Cache::Config.new(
   expires_in: 2.minutes,
   max_ttl: 10.minutes,
   ttl_resolver: ->(context : HTTP::Server::Context, key : String) { 2.minutes },
+  collapse_concurrent_misses: false,
   cacheable_methods: ["GET"],
   cacheable_status_codes: [200, 202],
   max_body_bytes: 128_000,
@@ -223,6 +225,20 @@ Invalid TTL behavior is fail-fast:
 - `max_ttl`, when set, must be positive
 - `ttl_resolver` may return `nil` or a positive TTL
 - zero or negative resolved TTL values raise `ArgumentError`
+
+### Cache Stampede Protection
+
+Enable `collapse_concurrent_misses` to coalesce concurrent cache misses for the same resolved key within the current process:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  collapse_concurrent_misses: true
+)
+```
+
+When enabled, the first request computes and stores the response while other in-flight requests for the same key wait and retry the cache read after the leader finishes.
+
+This protection is opt-in and process-local. It reduces duplicate origin work inside one app instance, but it does not coordinate across multiple processes or hosts.
 
 ### Methods And Status Codes
 
@@ -500,6 +516,7 @@ Common bypass details include `disabled`, `method_not_cacheable`, `skip_if`, `au
 
 - `MemoryStore` is process-local, so each app instance keeps its own cache.
 - Use `RedisStore` when multiple instances should share cached responses.
+- `collapse_concurrent_misses` only collapses misses inside the current process.
 - `clear_cache` only clears the configured store namespace.
 - Corrupt cached payloads are discarded automatically and retried as cache misses.
 - Store `get`, `set`, and corrupt-payload `delete` errors fail open at the middleware layer and are emitted as `StoreError` events.
