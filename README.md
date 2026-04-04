@@ -152,6 +152,7 @@ require "kemal-cache"
 
 config = Kemal::Cache::Config.new(
   expires_in: 2.minutes,
+  ttl_resolver: ->(context : HTTP::Server::Context, key : String) { 2.minutes },
   cacheable_methods: ["GET"],
   cacheable_status_codes: [200, 202],
   max_body_bytes: 128_000,
@@ -180,6 +181,38 @@ config = Kemal::Cache::Config.new(
   end
 )
 ```
+
+### TTL Policies
+
+Use `expires_in` when every cached response should use the same TTL:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  expires_in: 10.minutes
+)
+```
+
+Use `ttl_resolver` when the TTL should vary by route or resolved cache key:
+
+```crystal
+config = Kemal::Cache::Config.new(
+  key_generator: ->(context : HTTP::Server::Context) { context.request.path },
+  ttl_resolver: ->(context : HTTP::Server::Context, key : String) do
+    case key
+    when "/homepage"
+      30.seconds
+    when "/catalog"
+      5.minutes
+    else
+      context.request.path.starts_with?("/api/") ? 15.seconds : nil
+    end
+  end
+)
+```
+
+Returning `nil` falls back to `expires_in`.
+
+Resolved TTL values must be positive.
 
 ### Methods And Status Codes
 
