@@ -292,7 +292,7 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-When enabled, the first request computes and stores the response while other in-flight requests for the same key wait and retry the cache read after the leader finishes.
+For buffered responses, the first request computes and stores the response while other in-flight requests for the same key wait and retry. When the leader starts streaming, waiting requests proceed without waiting for the stream to finish.
 
 This protection is opt-in and process-local. It reduces duplicate origin work inside one app instance, but it does not coordinate across multiple processes or hosts.
 

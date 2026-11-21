@@ -80,7 +80,7 @@ module Kemal::Cache
         origin_age = (cached_response.origin_age || 0_i64).clamp(0_i64, MAX_AGE)
         context.response.headers["Age"] = {origin_age + resident_time, MAX_AGE}.min.to_s
       end
-      if cached_response.status_code == 200 && not_modified?(context.request, cached_response.headers)
+      if cached_response.status_code == 200 && not_modified?(context.request, context.response.headers)
         context.response.status_code = 304
         context.response.headers[HEADER_NAME] = "HIT"
         @config.observe(EventType::Hit, key: key, context: context, status_code: 304)
@@ -91,7 +91,21 @@ module Kemal::Cache
       context.response.status_code = cached_response.status_code
       context.response.headers[HEADER_NAME] = "HIT"
       @config.observe(EventType::Hit, key: key, context: context, status_code: cached_response.status_code)
-      context.response.print body
+      replay_body(context, body)
+    end
+
+    private def replay_body(context : HTTP::Server::Context, body : String) : Nil
+      response = context.response
+      if context.request.version == "HTTP/1.0" && context.request.method != "HEAD" &&
+         body_allowed?(response.status_code) && !response.kemal_cache_headers_sent? &&
+         !response.headers.has_key?("Content-Length")
+        if response.output.is_a?(HTTP::Server::Response::Output) && !response.headers.has_key?("Transfer-Encoding")
+          response.content_length = body.bytesize
+        else
+          response.headers["Connection"] = "close"
+        end
+      end
+      response.print body
     end
 
     private def prepare_hit_headers(headers : HTTP::Headers, cached_headers : Hash(String, Array(String))) : Nil
@@ -104,7 +118,7 @@ module Kemal::Cache
       headers.delete("Transfer-Encoding")
     end
 
-    private def write_miss(context : HTTP::Server::Context, key : String) : Nil
+    private def write_miss(context : HTTP::Server::Context, key : String, on_stream : Proc(Nil)? = nil) : Nil
       response = context.response
       original_output = response.output
       baseline_headers = snapshot_headers(response.headers)
@@ -114,15 +128,19 @@ module Kemal::Cache
       store = @config.store
       generation = safe_write_generation(store, key, context)
       forwarding_metadata = nil
+      forwarded_at = nil
       close_stream = false
       before_forward = -> do
-        close_stream = context.request.version == "HTTP/1.0" && !response.headers.has_key?("Content-Length")
-        response.headers["Connection"] = "close" if close_stream
+        if context.request.version == "HTTP/1.0" && !response.kemal_cache_headers_sent?
+          close_stream ||= !response.headers.has_key?("Content-Length")
+          response.headers["Connection"] = "close" if close_stream
+        end
         nil
       end
-      capture_output = CaptureIO.new(original_output, @config.max_body_bytes, @config.cache_streaming, before_forward) do
+      capture_output = CaptureIO.new(original_output, @config.max_body_bytes, @config.cache_streaming, before_forward, on_stream) do
         if forwarding_metadata.nil? && response.kemal_cache_headers_sent?
           forwarding_metadata = storage_metadata(response)
+          forwarded_at = {Time.utc, Time.instant}
         end
       end
 
@@ -133,11 +151,17 @@ module Kemal::Cache
 
       body = capture_output.captured_body
       if body && generation && storable_response?(context) &&
-         (forwarding_metadata.nil? || forwarding_metadata == storage_metadata(response))
+         (forwarding_metadata.nil? || forwarding_metadata == storage_metadata(response)) &&
+         valid_body_length?(request_method, response, body.bytesize)
         ttl = @config.resolve_ttl(context, key)
         stored_at = Time.utc
-        origin_age = response_age(response.headers, stored_at)
-        if remaining = response_freshness(response.headers, origin_age)
+        if committed_at = forwarded_at
+          received_at, elapsed_start = committed_at
+          age = response_age(response.headers, received_at).seconds + (Time.instant - elapsed_start)
+        else
+          age = response_age(response.headers, stored_at).seconds
+        end
+        if remaining = response_freshness(response.headers, age)
           ttl = remaining if remaining < ttl
         end
         if ttl > 0.seconds
@@ -149,7 +173,7 @@ module Kemal::Cache
             request_method: request_method,
             vary_request_headers: snapshot_vary_headers(response.headers, request_headers),
             stored_at: stored_at,
-            origin_age: origin_age,
+            origin_age: age.total_seconds.to_i64,
           ).to_json
           safe_store_set(store, key, payload, ttl, generation, context)
         end
@@ -157,7 +181,7 @@ module Kemal::Cache
 
       unless capture_output.streaming?
         response.headers[HEADER_NAME] = "MISS"
-        response.print body if body
+        replay_body(context, body) if body
       end
       @config.observe(EventType::Miss, key: key, context: context)
     ensure
@@ -196,13 +220,21 @@ module Kemal::Cache
 
         claim = @request_collapser.claim(key)
         if claim.owner?
+          released = false
+          release_claim = -> do
+            unless released
+              released = true
+              @request_collapser.release(key)
+            end
+          end
+
           begin
             return if write_hit_if_present(context, key)
 
-            write_miss(context, key)
+            write_miss(context, key, release_claim)
             return
           ensure
-            @request_collapser.release(key)
+            release_claim.call
           end
         else
           claim.wait
@@ -312,7 +344,7 @@ module Kemal::Cache
     end
 
     private def storage_metadata(response : HTTP::Server::Response)
-      {response.status_code, snapshot_headers(response.headers), response.kemal_cache_cookies?}
+      {response.status_code, snapshot_headers(response.headers), response.headers.get?("Content-Length").try(&.dup), response.kemal_cache_cookies?}
     end
 
     private def snapshot_response_headers(source : HTTP::Headers, baseline_headers : Hash(String, Array(String)), head : Bool) : Hash(String, Array(String))
@@ -320,7 +352,9 @@ module Kemal::Cache
 
       source.each do |name, values|
         next if skip_header?(name) && !(head && name.compare("Content-Length", case_insensitive: true).zero?)
-        next if baseline_headers[name]? == values
+        if baseline_headers[name]? == values
+          next unless name.downcase.in?("etag", "last-modified", "vary")
+        end
 
         headers[name] = values.dup
       end
@@ -352,6 +386,19 @@ module Kemal::Cache
         @config.should_cache?(context)
     end
 
+    private def body_allowed?(status : Int32) : Bool
+      status >= 200 && !status.in?(204, 205, 304)
+    end
+
+    private def valid_body_length?(request_method : String, response : HTTP::Server::Response, bytesize : Int32) : Bool
+      return true if request_method == "HEAD" || !body_allowed?(response.status_code)
+      return true unless lengths = response.headers.get?("Content-Length")
+      return false unless lengths.size == 1
+
+      length = lengths.first.strip
+      length.matches?(/\A[0-9]+\z/) && length.to_i64? == bytesize
+    end
+
     private def ensure_cache_validators(response : HTTP::Server::Response, body : String) : Nil
       unless header_present?(response.headers, "etag") || !@config.auto_etag
         response.headers["ETag"] = %{W/"#{Digest::SHA256.hexdigest(body)}"}
@@ -362,17 +409,17 @@ module Kemal::Cache
       end
     end
 
-    private def not_modified?(request : HTTP::Request, cached_headers : Hash(String, Array(String))) : Bool
+    private def not_modified?(request : HTTP::Request, headers : HTTP::Headers) : Bool
       return false unless @config.conditional_get && request.method.in?("GET", "HEAD")
 
       if if_none_match = request.if_none_match
-        etag = header_value(cached_headers, "etag")
+        etag = headers.get?("ETag").try(&.first?)
         return true if if_none_match.includes?("*")
         return false unless etag
 
         if_none_match.any? { |candidate| candidate.lchop("W/") == etag.lchop("W/") }
       elsif if_modified_since = request.headers["If-Modified-Since"]?
-        last_modified = header_value(cached_headers, "last-modified")
+        last_modified = headers.get?("Last-Modified").try(&.first?)
         return false unless last_modified
 
         header_time = HTTP.parse_time(if_modified_since)
@@ -389,14 +436,6 @@ module Kemal::Cache
       end
 
       false
-    end
-
-    private def header_value(headers : Hash(String, Array(String)), target_name : String) : String?
-      headers.each do |name, values|
-        return values.first? if name.downcase == target_name && !values.empty?
-      end
-
-      nil
     end
 
     private def vary_star?(headers : HTTP::Headers) : Bool
@@ -442,7 +481,7 @@ module Kemal::Cache
       age
     end
 
-    private def response_freshness(headers : HTTP::Headers, age : Int64) : Time::Span?
+    private def response_freshness(headers : HTTP::Headers, age : Time::Span) : Time::Span?
       directives = cache_control(headers)
       values = directives.select { |name, _| name == "s-maxage" }
       values = directives.select { |name, _| name == "max-age" } if values.empty?
@@ -450,7 +489,7 @@ module Kemal::Cache
       return 0.seconds unless values.size == 1 && (seconds = values.first[1].to_u64?)
 
       seconds = {seconds, MAX_AGE.to_u64}.min.to_i64
-      {seconds - age, 0_i64}.max.seconds
+      {seconds.seconds - age, 0.seconds}.max
     end
 
     private def cache_control(headers : HTTP::Headers) : Array({String, String})
@@ -487,7 +526,7 @@ module Kemal::Cache
 
       @capture : IO::Memory? = IO::Memory.new
 
-      def initialize(@output : IO, @max_body_bytes : Int32?, @cache_streaming : Bool, @before_forward : ->, &@after_forward : ->)
+      def initialize(@output : IO, @max_body_bytes : Int32?, @cache_streaming : Bool, @before_forward : ->, @on_stream : Proc(Nil)?, &@after_forward : ->)
       end
 
       def read(slice : Bytes) : Int32
@@ -504,10 +543,7 @@ module Kemal::Cache
           end
         end
 
-        if @streaming
-          @output.write(slice)
-          @after_forward.call if @capture
-        end
+        forward { @output.write(slice) } if @streaming
       end
 
       def captured_body : String?
@@ -516,29 +552,32 @@ module Kemal::Cache
 
       def flush : Nil
         start_stream(keep_capture: @cache_streaming)
-        @output.flush
-        @after_forward.call if @capture
+        forward { @output.flush }
       end
 
       def close : Nil
-        start_stream(keep_capture: true)
-        @output.close
-        @after_forward.call if @capture
+        start_stream(keep_capture: true, notify: false)
+        forward { @output.close }
       end
 
       def closed? : Bool
         @output.closed?
       end
 
-      private def start_stream(keep_capture : Bool) : Nil
+      private def forward(&) : Nil
+        @before_forward.call
+        yield
+        @after_forward.call if @capture
+      end
+
+      private def start_stream(keep_capture : Bool, notify : Bool = true) : Nil
         return if @streaming
 
         @streaming = true
-        @before_forward.call
+        @on_stream.try(&.call) if notify
         if buffer = @capture
-          @output.write(buffer.to_slice)
           @capture = nil unless keep_capture
-          @after_forward.call if @capture
+          forward { @output.write(buffer.to_slice) }
         end
       end
     end

@@ -349,6 +349,149 @@ describe Kemal::Cache::Handler do
     server.try(&.close)
   end
 
+  it "closes an HTTP/1.0 stream when a length is removed after an empty flush" do
+    handler = Kemal::Cache::Handler.new
+    handler.next = ->(context : HTTP::Server::Context) do
+      context.response.content_length = 4
+      context.response.flush
+      context.response.headers.delete("Content-Length")
+      context.response.print "body"
+      context.response.flush
+    end
+    server = HTTP::Server.new(handler)
+    address = server.bind_tcp("127.0.0.1", 0)
+    spawn { server.listen }
+    TCPSocket.open(address.address, address.port) do |socket|
+      socket.read_timeout = 2.seconds
+      socket << "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n"
+      socket.gets_to_end.should end_with("body")
+    end
+  ensure
+    server.try(&.close)
+  end
+
+  it "frames large buffered responses and cache hits on HTTP/1.0 keep-alive connections" do
+    body = "a" * 32_768
+    handler = Kemal::Cache::Handler.new
+    handler.next = ->(context : HTTP::Server::Context) { context.response.print body }
+    server = HTTP::Server.new(handler)
+    address = server.bind_tcp("127.0.0.1", 0)
+    spawn { server.listen }
+    TCPSocket.open(address.address, address.port) do |socket|
+      socket.read_timeout = 2.seconds
+      {"MISS", "HIT"}.each do |expected|
+        socket << "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n"
+        headers = socket.gets("\r\n\r\n").not_nil!
+        headers.should contain("Content-Length: #{body.bytesize}\r\n")
+        headers.should contain("X-Kemal-Cache: #{expected}\r\n")
+        socket.read_string(body.bytesize).should eq(body)
+      end
+    end
+  ensure
+    server.try(&.close)
+  end
+
+  it "lets concurrent live streams proceed even when cache misses collapse" do
+    config = Kemal::Cache::Config.new(cache_streaming: true, collapse_concurrent_misses: true)
+    handler = Kemal::Cache::Handler.new(config)
+    entered = Channel(Nil).new(2)
+    release = Channel(Nil).new
+    done = Channel(HTTP::Client::Response).new(2)
+    handler.next = ->(context : HTTP::Server::Context) do
+      context.response.headers["Cache-Control"] = "no-cache"
+      context.response.print "first"
+      context.response.flush
+      entered.send(nil)
+      release.receive?
+      context.response.print "last"
+    end
+    request = -> { process_request(handler, HTTP::Request.new("GET", "/events")) }
+    spawn { done.send(request.call) }
+    entered.receive
+    spawn { done.send(request.call) }
+    entered_before_release = select
+    when entered.receive
+      true
+    when timeout(1.second)
+      false
+    end
+    release.close
+    2.times { done.receive.body.should eq("firstlast") }
+    entered_before_release.should be_true
+    config.stats.stores.should eq(0)
+  end
+
+  it "does not cache captured bytes that disagree with a committed Content-Length" do
+    [false, true].each do |change_length|
+      config = Kemal::Cache::Config.new(cache_streaming: true)
+      handler = Kemal::Cache::Handler.new(config)
+      handler.next = ->(context : HTTP::Server::Context) do
+        context.response.content_length = 8
+        context.response.print "half"
+        context.response.flush
+        context.response.headers["Content-Length"] = "4" if change_length
+        nil
+      end
+
+      2.times do
+        output = IO::Memory.new
+        response = HTTP::Server::Response.new(output)
+        handler.call(HTTP::Server::Context.new(HTTP::Request.new("GET", "/length"), response))
+        response.close
+        output.to_s.should contain("X-Kemal-Cache: MISS\r\n")
+      end
+      config.stats.stores.should eq(0)
+    end
+  end
+
+  it "does not store a live response whose freshness expires during delivery" do
+    store = RecordingStore.new
+    handler = Kemal::Cache::Handler.new(Kemal::Cache::Config.new(cache_streaming: true, store: store))
+    handler.next = ->(context : HTTP::Server::Context) do
+      context.response.headers["Cache-Control"] = "max-age=1"
+      context.response.print "first"
+      context.response.flush
+      sleep 1100.milliseconds
+      context.response.print "last"
+    end
+
+    process_request(handler, HTTP::Request.new("GET", "/stream-expired")).body.should eq("firstlast")
+    store.last_key.should be_nil
+  end
+
+  it "revalidates with an ETag supplied by upstream middleware" do
+    upstream_etag = %("upstream")
+    use RequestHeaderHandler.new("ETag", ->(_context : HTTP::Server::Context) { upstream_etag })
+    mount_cache { get("/upstream-validator") { "body" } }
+
+    get "/upstream-validator"
+    response.headers["ETag"].should eq(%("upstream"))
+    get "/upstream-validator", headers: HTTP::Headers{"If-None-Match" => %("upstream")}
+    response.status_code.should eq(304)
+    response.headers["X-Kemal-Cache"].should eq("HIT")
+
+    upstream_etag = %("newer")
+    get "/upstream-validator", headers: HTTP::Headers{"If-None-Match" => upstream_etag}
+    response.status_code.should eq(200)
+    response.headers["ETag"].should eq(%("upstream"))
+    response.body.should eq("body")
+  end
+
+  it "preserves an upstream Vary declaration when replaying its representation" do
+    vary = "Accept-Language"
+    use RequestHeaderHandler.new("Vary", ->(_context : HTTP::Server::Context) { vary })
+    mount_cache { get("/upstream-vary") { "body" } }
+    headers = HTTP::Headers{"Accept-Language" => "en"}
+
+    get "/upstream-vary", headers: headers
+    response.headers["Vary"].should eq("Accept-Language")
+
+    vary = ""
+    get "/upstream-vary", headers: headers
+    response.headers["X-Kemal-Cache"].should eq("HIT")
+    response.headers["Vary"].should eq("Accept-Language")
+  end
+
   it "matches Vary against the headers received before the route changes them" do
     mount_cache do
       get "/normalized" do |env|

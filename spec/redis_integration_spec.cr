@@ -123,3 +123,32 @@ describe "Redis cache regressions" do
     end
   end
 end
+
+describe "Redis invalidation storage" do
+  it "only removes keys when invalidating or clearing a cache" do
+    redis_url = real_redis_url
+    pending!("REDIS_URL is not set") unless redis_url
+    namespace = unique_redis_namespace
+    store = Kemal::Cache::RedisStore.new(redis_url, namespace)
+    redis = Redis::Client.new(URI.parse(redis_url))
+    prefix = "kemal-cache-v2:#{Base64.urlsafe_encode(namespace, padding: false)}"
+
+    [false, true].each do |clear|
+      generation = store.write_generation
+      store.set_if_current("item", "data", 1.minute, generation).should be_true
+
+      if clear
+        store.clear
+      else
+        store.delete("item")
+      end
+
+      keys = [] of String
+      redis.scan_each(match: "#{prefix}:*") { |key| keys << key }
+      keys.should be_empty
+      store.set_if_current("item", "stale", 1.minute, generation).should be_false
+    end
+  ensure
+    store.try(&.clear)
+  end
+end

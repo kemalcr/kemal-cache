@@ -66,19 +66,6 @@ module Kemal::Cache
           return 1
           LUA
       end
-
-      def delete_and_rotate(key : String, generation_key : String) : Nil
-        @client.eval(<<-LUA, keys: [key, generation_key], args: [Random::Secure.hex(16), GENERATION_TTL.total_seconds.to_i64.to_s])
-          redis.call("SET", KEYS[2], ARGV[1], "EX", ARGV[2])
-          return redis.call("DEL", KEYS[1])
-          LUA
-        nil
-      end
-
-      def rotate_generation(key : String) : Nil
-        @client.set(key, Random::Secure.hex(16), ex: GENERATION_TTL)
-        nil
-      end
     end
 
     getter client : Client
@@ -125,8 +112,8 @@ module Kemal::Cache
     end
 
     def delete(key : String) : Nil
-      if client = @client.as?(RedisClientAdapter)
-        client.delete_and_rotate(namespaced_key(key), generation_key)
+      if @client.is_a?(RedisClientAdapter)
+        @client.del(namespaced_key(key), generation_key)
       else
         @client.del(namespaced_key(key))
       end
@@ -136,8 +123,8 @@ module Kemal::Cache
     def clear : Nil
       keys_to_delete = [] of String
 
-      if client = @client.as?(RedisClientAdapter)
-        client.rotate_generation(generation_key)
+      if @client.is_a?(RedisClientAdapter)
+        @client.del(generation_key)
       end
 
       @client.scan_each(match: "#{entry_prefix}*") do |key|
