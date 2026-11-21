@@ -14,15 +14,15 @@ describe Kemal::Cache::RedisStore do
       store.clear
       client.del("#{other_namespace}:keep")
 
-      store.set("greeting", "hello", 50.milliseconds)
+      store.set("greeting", "hello", 1.minute)
       store.get("greeting").should eq("hello")
 
       store.delete("greeting")
       store.get("greeting").should be_nil
 
-      store.set("one", "1", 50.milliseconds)
-      store.set("two", "2", 50.milliseconds)
-      client.set("#{other_namespace}:keep", "3", ex: 50.milliseconds)
+      store.set("one", "1", 1.minute)
+      store.set("two", "2", 1.minute)
+      client.set("#{other_namespace}:keep", "3", ex: 1.minute)
       store.clear
 
       store.get("one").should be_nil
@@ -36,5 +36,137 @@ describe Kemal::Cache::RedisStore do
       store.clear
       client.del("#{other_namespace}:keep")
     end
+  end
+end
+
+describe "Redis cache regressions" do
+  it "clears only the selected namespace" do
+    redis_url = real_redis_url
+    pending!("REDIS_URL is not set") unless redis_url
+    id = unique_redis_namespace
+    store = Kemal::Cache::RedisStore.new(redis_url, "#{id}[x]")
+    glob_neighbor = Kemal::Cache::RedisStore.new(redis_url, "#{id}x")
+    nested_neighbor = Kemal::Cache::RedisStore.new(redis_url, "#{id}[x]:nested")
+    begin
+      store.set("own", "data", 1.minute)
+      glob_neighbor.set("keep", "glob", 1.minute)
+      nested_neighbor.set("keep", "nested", 1.minute)
+      store.clear
+      store.get("own").should be_nil
+      glob_neighbor.get("keep").should eq("glob")
+      nested_neighbor.get("keep").should eq("nested")
+    ensure
+      store.clear
+      glob_neighbor.clear
+      nested_neighbor.clear
+    end
+  end
+
+  it "clears large namespaces with a one-connection pool" do
+    redis_url = real_redis_url
+    pending!("REDIS_URL is not set") unless redis_url
+    url = URI.parse(redis_url)
+    params = url.query_params
+    params["max_pool_size"] = "1"
+    params["checkout_timeout"] = "0.05"
+    url.query = params.to_s
+    store = Kemal::Cache::RedisStore.new(url, unique_redis_namespace)
+    begin
+      1000.times { |i| store.set(i.to_s, "data", 1.minute) }
+      store.clear
+      1000.times { |i| store.get(i.to_s).should be_nil }
+    ensure
+      store.clear
+    end
+  end
+
+  it "accepts a positive submillisecond TTL" do
+    redis_url = real_redis_url
+    pending!("REDIS_URL is not set") unless redis_url
+    store = Kemal::Cache::RedisStore.new(redis_url, unique_redis_namespace)
+    begin
+      store.set("short", "data", 500.microseconds)
+      sleep 10.milliseconds
+      store.get("short").should be_nil
+    ensure
+      store.clear
+    end
+  end
+
+  it "fences in-flight writes across separate Redis store instances" do
+    redis_url = real_redis_url
+    pending!("REDIS_URL is not set") unless redis_url
+
+    [false, true].each do |clear|
+      namespace = unique_redis_namespace
+      store = Kemal::Cache::RedisStore.new(redis_url, namespace)
+      other_store = Kemal::Cache::RedisStore.new(redis_url, namespace)
+      other_config = Kemal::Cache::Config.new(store: other_store)
+      entered = Channel(Nil).new
+      release = Channel(Nil).new
+      done = Channel(HTTP::Client::Response).new
+      handler = Kemal::Cache::Handler.new(Kemal::Cache::Config.new(store: store))
+      handler.next = CoordinatedResponseHandler.new(entered, release, "old value")
+      spawn { done.send(process_request(handler, HTTP::Request.new("GET", "/race"))) }
+      entered.receive
+      invalidated = clear ? other_config.try_clear_cache : other_config.try_invalidate("/race")
+      release.send(nil)
+      done.receive.body.should eq("old value")
+      invalidated.should be_true
+      other_store.get("/race").should be_nil
+    ensure
+      store.try(&.clear)
+    end
+  end
+end
+
+describe "Redis invalidation storage" do
+  it "only removes keys when invalidating or clearing a cache" do
+    redis_url = real_redis_url
+    pending!("REDIS_URL is not set") unless redis_url
+    namespace = unique_redis_namespace
+    store = Kemal::Cache::RedisStore.new(redis_url, namespace)
+    redis = Redis::Client.new(URI.parse(redis_url))
+    prefix = "kemal-cache-v2.#{Base64.urlsafe_encode(namespace, padding: false)}"
+
+    [false, true].each do |clear|
+      generation = store.write_generation
+      store.set_if_current("item", "data", 1.minute, generation).should be_true
+
+      if clear
+        store.clear
+      else
+        store.delete("item")
+      end
+
+      keys = [] of String
+      redis.scan_each(match: "#{prefix}.*") { |key| keys << key }
+      keys.should be_empty
+      store.set_if_current("item", "stale", 1.minute, generation).should be_false
+    end
+  ensure
+    store.try(&.clear)
+  end
+end
+
+describe "Redis key format compatibility" do
+  it "keeps new keys out of legacy namespace scans" do
+    redis_url = real_redis_url
+    pending!("REDIS_URL is not set") unless redis_url
+    namespace = unique_redis_namespace
+    store = Kemal::Cache::RedisStore.new(redis_url, namespace)
+    redis = Redis::Client.new(URI.parse(redis_url))
+    key = "/items?filter=a:b"
+    store.set_if_current(key, "data", 1.minute, store.write_generation).should be_true
+
+    encoded_namespace = Base64.urlsafe_encode(namespace, padding: false)
+    {"kemal-cache:*", "kemal-cache-v2:*", "*:*"}.each do |pattern|
+      matches = [] of String
+      redis.scan_each(match: pattern) { |candidate| matches << candidate if candidate.includes?(encoded_namespace) }
+      matches.should be_empty
+    end
+    store.get(key).should eq("data")
+  ensure
+    store.try(&.clear)
   end
 end

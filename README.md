@@ -120,14 +120,16 @@ Every response will include `X-Kemal-Cache: MISS` or `X-Kemal-Cache: HIT`, so ca
 Without any configuration, `kemal-cache`:
 
 - caches `GET` requests only
-- uses `context.request.resource` as the cache key
+- uses `context.request.resource` as the GET cache key
 - caches successful `2xx` responses only
 - stores entries for `10.minutes`
 - uses `Kemal::Cache::MemoryStore`
 - bypasses requests with `Authorization` or `Cookie`
 - skips storing responses with `Set-Cookie`
 - skips storing responses with `Cache-Control: no-store`, `no-cache`, or `private`
+- bypasses range requests and skips storing partial responses
 - skips storing responses with `Vary: *`
+- reuses other `Vary` responses only when their request headers match
 - skips storing responses larger than `1_048_576` bytes
 - skips storing responses that call `flush`
 - auto-generates `ETag` and `Last-Modified`
@@ -222,7 +224,9 @@ use Kemal::Cache::Handler.new(config)
 
 ### Cache Keys
 
-By default the key is `context.request.resource`, which includes the path and query string.
+By default the GET key is `context.request.resource`, which includes the path and query string. Enabled non-GET methods prefix their keys with the method and a space, such as `POST /articles`.
+
+Responses with `Vary` are checked against the request headers that produced them. A key holds one response at a time. Include commonly used variant headers in a custom key to keep multiple variants hot.
 
 Override it with `key_generator` when you need to change cache granularity:
 
@@ -230,12 +234,14 @@ Override it with `key_generator` when you need to change cache granularity:
 config = Kemal::Cache::Config.new(
   key_generator: ->(context : HTTP::Server::Context) do
     locale = context.request.headers["Accept-Language"]? || "default"
-    "#{context.request.path}:#{locale}"
+    "#{context.request.resource}:#{locale}"
   end
 )
 ```
 
 ### TTL Policies
+
+Response `Cache-Control: max-age` and `s-maxage` can shorten the configured TTL, taking the response's `Age` into account. Requests with `no-cache`, `no-store`, or `max-age=0` bypass the cache.
 
 Use `expires_in` when every cached response should use the same TTL:
 
@@ -286,7 +292,7 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-When enabled, the first request computes and stores the response while other in-flight requests for the same key wait and retry the cache read after the leader finishes.
+For buffered responses, the first request computes and stores the response while other in-flight requests for the same key wait and retry. When the middleware determines that a live response cannot be cached, waiting requests proceed without waiting for the stream to finish. Cacheable streams still share the fill.
 
 This protection is opt-in and process-local. It reduces duplicate origin work inside one app instance, but it does not coordinate across multiple processes or hosts.
 
@@ -362,7 +368,9 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-Allow caching responses that call `flush`:
+A response starts streaming when it flushes or exceeds the body limit. Exceeding the limit stops capture. Flushes reach the client with either setting.
+
+Allow storage of completed streams within the body limit:
 
 ```crystal
 config = Kemal::Cache::Config.new(
@@ -371,6 +379,8 @@ config = Kemal::Cache::Config.new(
 ```
 
 ### HTTP Validators
+
+Automatic validators are added to buffered cacheable responses. A streaming route can set its own validators before its first flush.
 
 Validator support is enabled by default:
 
@@ -408,7 +418,7 @@ store = Kemal::Cache::MemoryStore.new(max_entries: 10_000)
 config = Kemal::Cache::Config.new(store: store)
 ```
 
-When the limit is reached, the oldest entry is evicted on the next write.
+Writes reclaim expired entries before evicting the oldest live entry. A limit of zero disables retention.
 
 ### `RedisStore`
 
@@ -433,7 +443,9 @@ store = Kemal::Cache::RedisStore.from_env("REDIS_URL")
 config = Kemal::Cache::Config.new(store: store)
 ```
 
-`RedisStore#clear` removes namespaced keys using Redis `SCAN`, which avoids the blocking behavior of `KEYS` on large datasets.
+`RedisStore#clear` removes namespaced entries using Redis `SCAN`. The built-in Redis client uses a namespace generation to prevent in-flight responses from restoring invalidated entries across instances. Redis TTLs below 1 ms are rounded up to 1 ms.
+
+The isolated Redis key format starts a fresh cache on upgrade. Previous entries expire on their existing TTLs. Restricted Redis ACLs need `EVAL` and access to the new `kemal-cache-v2.*` key pattern along with the ordinary cache commands.
 
 ### Custom Stores
 
@@ -567,14 +579,15 @@ Common bypass details include `disabled`, `method_not_cacheable`, `skip_if`, `au
 - `MemoryStore` is process-local, so each app instance keeps its own cache.
 - Use `RedisStore` when multiple instances should share cached responses.
 - `collapse_concurrent_misses` only collapses misses inside the current process.
-- `clear_cache` only clears the configured store namespace.
+- `clear_cache` clears the configured store namespace. Config invalidation discards in-flight fills started before it, including fills for other keys in that store or Redis namespace.
+- Custom stores and custom Redis clients get in-flight write protection within a single store object. Shared backends can override the generation operations to coordinate across instances.
 - Corrupt cached payloads are discarded automatically and retried as cache misses.
 - Store `get`, `set`, and corrupt-payload `delete` errors fail open at the middleware layer and are emitted as `StoreError` events.
 - Upstream middleware headers are preserved unless the cached response intentionally replaces the same header name.
 
 ## How It Works
 
-On a cache miss, the middleware buffers the response body, decides whether the response is storable, persists it with the configured TTL, and then writes the response to the client.
+On a cache miss, the middleware buffers the response up to the configured limit. A flush or an oversized body starts forwarding bytes to the client. Eligible completed responses are stored with the resolved TTL.
 
 On a cache hit, it restores the cached body, status, and response headers without invoking the rest of the handler chain.
 
