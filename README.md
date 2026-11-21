@@ -292,7 +292,7 @@ config = Kemal::Cache::Config.new(
 )
 ```
 
-For buffered responses, the first request computes and stores the response while other in-flight requests for the same key wait and retry. When the leader starts streaming, waiting requests proceed without waiting for the stream to finish.
+For buffered responses, the first request computes and stores the response while other in-flight requests for the same key wait and retry. When the middleware determines that a live response cannot be cached, waiting requests proceed without waiting for the stream to finish. Cacheable streams still share the fill.
 
 This protection is opt-in and process-local. It reduces duplicate origin work inside one app instance, but it does not coordinate across multiple processes or hosts.
 
@@ -445,7 +445,7 @@ config = Kemal::Cache::Config.new(store: store)
 
 `RedisStore#clear` removes namespaced entries using Redis `SCAN`. The built-in Redis client uses a namespace generation to prevent in-flight responses from restoring invalidated entries across instances. Redis TTLs below 1 ms are rounded up to 1 ms.
 
-The isolated Redis key format starts a fresh cache on upgrade. Previous entries expire on their existing TTLs. Restricted Redis ACLs need `EVAL` and access to the new `kemal-cache-v2:*` key pattern along with the ordinary cache commands.
+The isolated Redis key format starts a fresh cache on upgrade. Previous entries expire on their existing TTLs. Restricted Redis ACLs need `EVAL` and access to the new `kemal-cache-v2.*` key pattern along with the ordinary cache commands.
 
 ### Custom Stores
 

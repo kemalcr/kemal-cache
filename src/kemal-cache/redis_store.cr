@@ -137,12 +137,14 @@ module Kemal::Cache
     end
 
     private def namespaced_key(key : String) : String
-      "#{entry_prefix}#{key}"
+      "#{entry_prefix}#{Base64.urlsafe_encode(key, padding: false)}"
     end
 
-    private getter entry_prefix : String { "#{namespace_prefix}entry:" }
+    private getter entry_prefix : String { "#{namespace_prefix}entry." }
     private getter generation_key : String { "#{namespace_prefix}generation" }
-    private getter namespace_prefix : String { "kemal-cache-v2:#{Base64.urlsafe_encode(namespace, padding: false)}:" }
+
+    # Keep the namespace separator used by legacy scans out of physical keys.
+    private getter namespace_prefix : String { "kemal-cache-v2.#{Base64.urlsafe_encode(namespace, padding: false)}." }
 
     private def redis_ttl(ttl : Time::Span) : Time::Span
       0.seconds < ttl < 1.millisecond ? 1.millisecond : ttl

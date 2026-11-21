@@ -99,11 +99,8 @@ module Kemal::Cache
       if context.request.version == "HTTP/1.0" && context.request.method != "HEAD" &&
          body_allowed?(response.status_code) && !response.kemal_cache_headers_sent? &&
          !response.headers.has_key?("Content-Length")
-        if response.output.is_a?(HTTP::Server::Response::Output) && !response.headers.has_key?("Transfer-Encoding")
-          response.content_length = body.bytesize
-        else
-          response.headers["Connection"] = "close"
-        end
+        # Other middleware can write bytes before or after the cached body.
+        response.headers["Connection"] = "close"
       end
       response.print body
     end
@@ -116,9 +113,11 @@ module Kemal::Cache
       headers.delete(HEADER_NAME)
       headers.delete("Content-Length")
       headers.delete("Transfer-Encoding")
+      headers.delete("ETag")
+      headers.delete("Last-Modified")
     end
 
-    private def write_miss(context : HTTP::Server::Context, key : String, on_stream : Proc(Nil)? = nil) : Nil
+    private def write_miss(context : HTTP::Server::Context, key : String, on_uncacheable : Proc(Nil)? = nil) : Nil
       response = context.response
       original_output = response.output
       baseline_headers = snapshot_headers(response.headers)
@@ -137,10 +136,16 @@ module Kemal::Cache
         end
         nil
       end
-      capture_output = CaptureIO.new(original_output, @config.max_body_bytes, @config.cache_streaming, before_forward, on_stream) do
-        if forwarding_metadata.nil? && response.kemal_cache_headers_sent?
+      cache_streaming = @config.cache_streaming && !generation.nil?
+      capture_output = CaptureIO.new(original_output, @config.max_body_bytes, cache_streaming, before_forward, on_uncacheable) do |started_at|
+        if !response.kemal_cache_headers_sent?
+          CaptureResult::Pending
+        elsif !storable_response_headers?(response) || response_freshness(response.headers, response_age(response.headers, started_at[0]).seconds).try(&.zero?)
+          CaptureResult::Discard
+        else
           forwarding_metadata = storage_metadata(response)
-          forwarded_at = {Time.utc, Time.instant}
+          forwarded_at = started_at
+          CaptureResult::Keep
         end
       end
 
@@ -372,8 +377,10 @@ module Kemal::Cache
     end
 
     private def storable_response?(context : HTTP::Server::Context) : Bool
-      response = context.response
+      storable_response_headers?(context.response) && @config.should_cache?(context)
+    end
 
+    private def storable_response_headers?(response : HTTP::Server::Response) : Bool
       response.upgrade_handler.nil? &&
         response.status_code != 101 &&
         response.status_code != 206 &&
@@ -382,8 +389,7 @@ module Kemal::Cache
         !header_present?(response.headers, "set-cookie") &&
         !response.kemal_cache_cookies? &&
         !vary_star?(response.headers) &&
-        !cache_control_disallows_storage?(response.headers) &&
-        @config.should_cache?(context)
+        !cache_control_disallows_storage?(response.headers)
     end
 
     private def body_allowed?(status : Int32) : Bool
@@ -521,12 +527,26 @@ module Kemal::Cache
       tokens
     end
 
+    private enum CaptureResult
+      Pending
+      Keep
+      Discard
+    end
+
     private class CaptureIO < IO
       getter? streaming = false
 
       @capture : IO::Memory? = IO::Memory.new
+      @committed = false
 
-      def initialize(@output : IO, @max_body_bytes : Int32?, @cache_streaming : Bool, @before_forward : ->, @on_stream : Proc(Nil)?, &@after_forward : ->)
+      def initialize(
+        @output : IO,
+        @max_body_bytes : Int32?,
+        @cache_streaming : Bool,
+        @before_forward : ->,
+        @on_uncacheable : Proc(Nil)?,
+        &@after_forward : Tuple(Time, Time::Instant) -> CaptureResult
+      )
       end
 
       def read(slice : Bytes) : Int32
@@ -537,7 +557,7 @@ module Kemal::Cache
         if buffer = @capture
           if (limit = @max_body_bytes) && slice.size > limit - buffer.size
             start_stream(keep_capture: false)
-            @capture = nil
+            discard_capture
           else
             buffer.write(slice)
           end
@@ -556,7 +576,7 @@ module Kemal::Cache
       end
 
       def close : Nil
-        start_stream(keep_capture: true, notify: false)
+        start_stream(keep_capture: true)
         forward { @output.close }
       end
 
@@ -566,19 +586,31 @@ module Kemal::Cache
 
       private def forward(&) : Nil
         @before_forward.call
+        started_at = {Time.utc, Time.instant} if @capture && !@committed
         yield
-        @after_forward.call if @capture
+        if started_at
+          case @after_forward.call(started_at)
+          when .keep?    then @committed = true
+          when .discard? then discard_capture
+          end
+        end
       end
 
-      private def start_stream(keep_capture : Bool, notify : Bool = true) : Nil
+      private def start_stream(keep_capture : Bool) : Nil
         return if @streaming
 
         @streaming = true
-        @on_stream.try(&.call) if notify
         if buffer = @capture
-          @capture = nil unless keep_capture
+          discard_capture unless keep_capture
           forward { @output.write(buffer.to_slice) }
         end
+      end
+
+      private def discard_capture : Nil
+        return unless @capture
+
+        @capture = nil
+        @on_uncacheable.try(&.call)
       end
     end
   end

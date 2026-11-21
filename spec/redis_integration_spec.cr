@@ -49,10 +49,6 @@ describe "Redis cache regressions" do
     nested_neighbor = Kemal::Cache::RedisStore.new(redis_url, "#{id}[x]:nested")
     begin
       store.set("own", "data", 1.minute)
-      redis = Redis::Client.new(URI.parse(redis_url))
-      keys = [] of String
-      redis.scan_each(match: "kemal-cache:*") { |key| keys << key }
-      keys.any? { |key| key.ends_with?(":entry:own") }.should be_false
       glob_neighbor.set("keep", "glob", 1.minute)
       nested_neighbor.set("keep", "nested", 1.minute)
       store.clear
@@ -131,7 +127,7 @@ describe "Redis invalidation storage" do
     namespace = unique_redis_namespace
     store = Kemal::Cache::RedisStore.new(redis_url, namespace)
     redis = Redis::Client.new(URI.parse(redis_url))
-    prefix = "kemal-cache-v2:#{Base64.urlsafe_encode(namespace, padding: false)}"
+    prefix = "kemal-cache-v2.#{Base64.urlsafe_encode(namespace, padding: false)}"
 
     [false, true].each do |clear|
       generation = store.write_generation
@@ -144,10 +140,32 @@ describe "Redis invalidation storage" do
       end
 
       keys = [] of String
-      redis.scan_each(match: "#{prefix}:*") { |key| keys << key }
+      redis.scan_each(match: "#{prefix}.*") { |key| keys << key }
       keys.should be_empty
       store.set_if_current("item", "stale", 1.minute, generation).should be_false
     end
+  ensure
+    store.try(&.clear)
+  end
+end
+
+describe "Redis key format compatibility" do
+  it "keeps new keys out of legacy namespace scans" do
+    redis_url = real_redis_url
+    pending!("REDIS_URL is not set") unless redis_url
+    namespace = unique_redis_namespace
+    store = Kemal::Cache::RedisStore.new(redis_url, namespace)
+    redis = Redis::Client.new(URI.parse(redis_url))
+    key = "/items?filter=a:b"
+    store.set_if_current(key, "data", 1.minute, store.write_generation).should be_true
+
+    encoded_namespace = Base64.urlsafe_encode(namespace, padding: false)
+    {"kemal-cache:*", "kemal-cache-v2:*", "*:*"}.each do |pattern|
+      matches = [] of String
+      redis.scan_each(match: pattern) { |candidate| matches << candidate if candidate.includes?(encoded_namespace) }
+      matches.should be_empty
+    end
+    store.get(key).should eq("data")
   ensure
     store.try(&.clear)
   end

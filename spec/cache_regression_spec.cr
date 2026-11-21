@@ -1,5 +1,37 @@
 require "./spec_helper"
 
+private class DelayedFlushOutput < IO
+  def initialize(@output : IO)
+  end
+
+  def read(slice : Bytes) : Int32
+    @output.read(slice)
+  end
+
+  def write(slice : Bytes) : Nil
+    @output.write(slice)
+  end
+
+  def close : Nil
+    @output.close
+  end
+
+  def closed? : Bool
+    @output.closed?
+  end
+
+  def flush : Nil
+    @output.flush
+    sleep 1100.milliseconds
+  end
+end
+
+private class UnavailableGenerationStore < Kemal::Cache::MemoryStore
+  def write_generation : String
+    raise "generation unavailable"
+  end
+end
+
 describe Kemal::Cache::Handler do
   it "preserves binary bytes on a hit" do
     body = Bytes[0x00, 0xff, 0x80, 0x61]
@@ -370,55 +402,117 @@ describe Kemal::Cache::Handler do
     server.try(&.close)
   end
 
-  it "frames large buffered responses and cache hits on HTTP/1.0 keep-alive connections" do
+  it "frames large HTTP/1.0 responses when clients request keep-alive" do
     body = "a" * 32_768
     handler = Kemal::Cache::Handler.new
     handler.next = ->(context : HTTP::Server::Context) { context.response.print body }
     server = HTTP::Server.new(handler)
     address = server.bind_tcp("127.0.0.1", 0)
     spawn { server.listen }
-    TCPSocket.open(address.address, address.port) do |socket|
-      socket.read_timeout = 2.seconds
-      {"MISS", "HIT"}.each do |expected|
+    {"MISS", "HIT"}.each do |expected|
+      TCPSocket.open(address.address, address.port) do |socket|
+        socket.read_timeout = 2.seconds
         socket << "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n"
-        headers = socket.gets("\r\n\r\n").not_nil!
-        headers.should contain("Content-Length: #{body.bytesize}\r\n")
-        headers.should contain("X-Kemal-Cache: #{expected}\r\n")
-        socket.read_string(body.bytesize).should eq(body)
+        response = HTTP::Client::Response.from_io(socket)
+        response.headers["Connection"].should eq("close")
+        response.headers["X-Kemal-Cache"].should eq(expected)
+        response.body.should eq(body)
       end
     end
   ensure
     server.try(&.close)
   end
 
-  it "lets concurrent live streams proceed even when cache misses collapse" do
+  it "does not truncate HTTP/1.0 bodies written around the cache handler" do
+    handler = Kemal::Cache::Handler.new
+    handler.next = ->(context : HTTP::Server::Context) { context.response.print "cached" }
+    server = HTTP::Server.new do |context|
+      context.response.print "before-"
+      handler.call(context)
+      context.response.print "-after"
+    end
+    address = server.bind_tcp("127.0.0.1", 0)
+    spawn { server.listen }
+
+    {"MISS", "HIT"}.each do |expected|
+      TCPSocket.open(address.address, address.port) do |socket|
+        socket.read_timeout = 2.seconds
+        socket << "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n"
+        response = HTTP::Client::Response.from_io(socket)
+        response.headers["X-Kemal-Cache"].should eq(expected)
+        response.body.should eq("before-cached-after")
+      end
+    end
+  ensure
+    server.try(&.close)
+  end
+
+  it "lets uncacheable live streams proceed even when cache misses collapse" do
+    [{Kemal::Cache::MemoryStore.new, true}, {UnavailableGenerationStore.new, false}].each do |store, no_cache|
+      config = Kemal::Cache::Config.new(cache_streaming: true, collapse_concurrent_misses: true, store: store)
+      handler = Kemal::Cache::Handler.new(config)
+      entered = Channel(Nil).new(2)
+      release = Channel(Nil).new
+      done = Channel(HTTP::Client::Response).new(2)
+      handler.next = ->(context : HTTP::Server::Context) do
+        context.response.headers["Cache-Control"] = "no-cache" if no_cache
+        context.response.print "first"
+        context.response.flush
+        entered.send(nil)
+        release.receive?
+        context.response.print "last"
+      end
+      request = -> { process_request(handler, HTTP::Request.new("GET", "/events")) }
+      spawn { done.send(request.call) }
+      entered.receive
+      spawn { done.send(request.call) }
+      entered_before_release = select
+      when entered.receive
+        true
+      when timeout(1.second)
+        false
+      end
+      release.close
+      2.times { done.receive.body.should eq("firstlast") }
+      entered_before_release.should be_true
+      config.stats.stores.should eq(0)
+    end
+  end
+
+  it "coalesces streams that can still be cached until the fill completes" do
     config = Kemal::Cache::Config.new(cache_streaming: true, collapse_concurrent_misses: true)
     handler = Kemal::Cache::Handler.new(config)
-    entered = Channel(Nil).new(2)
-    release = Channel(Nil).new
+    calls = 0
+    first_flushed = Channel(Nil).new
+    release_first = Channel(Nil).new
     done = Channel(HTTP::Client::Response).new(2)
     handler.next = ->(context : HTTP::Server::Context) do
-      context.response.headers["Cache-Control"] = "no-cache"
-      context.response.print "first"
+      calls += 1
+      current = calls
+      context.response.print "stream #{current}"
       context.response.flush
-      entered.send(nil)
-      release.receive?
-      context.response.print "last"
+      if current == 1
+        first_flushed.send(nil)
+        release_first.receive
+      end
     end
-    request = -> { process_request(handler, HTTP::Request.new("GET", "/events")) }
+    request = -> { process_request(handler, HTTP::Request.new("GET", "/cacheable-stream")) }
     spawn { done.send(request.call) }
-    entered.receive
+    first_flushed.receive
     spawn { done.send(request.call) }
-    entered_before_release = select
-    when entered.receive
-      true
-    when timeout(1.second)
-      false
+    premature = select
+    when response = done.receive
+      response
+    when timeout(100.milliseconds)
+      nil
     end
-    release.close
-    2.times { done.receive.body.should eq("firstlast") }
-    entered_before_release.should be_true
-    config.stats.stores.should eq(0)
+    release_first.send(nil)
+    remaining = premature ? 1 : 2
+    responses = Array.new(remaining) { done.receive }
+    responses << premature if premature
+    premature.should be_nil
+    responses.map(&.body).should eq(["stream 1", "stream 1"])
+    calls.should eq(1)
   end
 
   it "does not cache captured bytes that disagree with a committed Content-Length" do
@@ -457,6 +551,39 @@ describe Kemal::Cache::Handler do
 
     process_request(handler, HTTP::Request.new("GET", "/stream-expired")).body.should eq("firstlast")
     store.last_key.should be_nil
+  end
+
+  it "includes a blocking flush in the age of a streamed response" do
+    store = RecordingStore.new
+    handler = Kemal::Cache::Handler.new(Kemal::Cache::Config.new(cache_streaming: true, store: store))
+    handler.next = ->(context : HTTP::Server::Context) do
+      context.response.headers["Cache-Control"] = "max-age=1"
+      context.response.print "chunk"
+      context.response.flush
+    end
+    output = IO::Memory.new
+    response = HTTP::Server::Response.new(output)
+    response.output = DelayedFlushOutput.new(response.output)
+    handler.call(HTTP::Server::Context.new(HTTP::Request.new("GET", "/flush-age"), response))
+    response.close
+    output.to_s.should contain("chunk")
+    store.last_key.should be_nil
+  end
+
+  it "does not attach an upstream validator to a cached response that had none" do
+    config = Kemal::Cache::Config.new(auto_etag: false, auto_last_modified: false)
+    handler = Kemal::Cache::Handler.new(config)
+    handler.next = ->(context : HTTP::Server::Context) { context.response.print "original" }
+    process_request(handler, HTTP::Request.new("GET", "/validator")).headers.has_key?("ETag").should be_false
+
+    upstream = RequestHeaderHandler.new("ETag", ->(_context : HTTP::Server::Context) { %("new") })
+    upstream.next = handler
+    request = HTTP::Request.new("GET", "/validator", HTTP::Headers{"If-None-Match" => %("new")})
+    hit = process_request(upstream, request)
+    hit.status_code.should eq(200)
+    hit.headers["X-Kemal-Cache"].should eq("HIT")
+    hit.headers.has_key?("ETag").should be_false
+    hit.body.should eq("original")
   end
 
   it "revalidates with an ETag supplied by upstream middleware" do
