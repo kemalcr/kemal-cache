@@ -16,7 +16,7 @@ describe Kemal::Cache::RedisStore do
     client.set("other-cache:keep", "3", ex: 20.milliseconds)
     store.clear
 
-    client.last_scan_pattern.should eq("spec-cache:*")
+    client.last_scan_pattern.should eq("kemal-cache-v2:#{Base64.urlsafe_encode("spec-cache", padding: false)}:entry:*")
     store.get("one").should be_nil
     store.get("two").should be_nil
     client.get("other-cache:keep").should eq("3")

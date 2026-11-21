@@ -79,7 +79,10 @@ module Kemal::Cache
     end
 
     def cache_key(context : HTTP::Server::Context) : String
-      @key_generator.try(&.call(context)) || context.request.resource
+      key = @key_generator.try(&.call(context)) || context.request.resource
+      method = context.request.method.upcase
+      return key if method == "GET" || !cacheable_method?(method)
+      "#{method} #{key}"
     end
 
     def ttl_resolver : TTLResolver?
@@ -110,12 +113,12 @@ module Kemal::Cache
     end
 
     def invalidate(key : String) : Nil
-      @store.delete(key)
+      @store.invalidate(key)
       observe(EventType::Invalidate, key: key)
     end
 
     def try_invalidate(key : String) : Bool
-      @store.delete(key)
+      @store.invalidate(key)
       observe(EventType::Invalidate, key: key)
       true
     rescue error
@@ -125,13 +128,13 @@ module Kemal::Cache
 
     def invalidate(context : HTTP::Server::Context) : Nil
       key = cache_key(context)
-      @store.delete(key)
+      @store.invalidate(key)
       observe(EventType::Invalidate, key: key, context: context)
     end
 
     def try_invalidate(context : HTTP::Server::Context) : Bool
       key = cache_key(context)
-      @store.delete(key)
+      @store.invalidate(key)
       observe(EventType::Invalidate, key: key, context: context)
       true
     rescue error
@@ -140,12 +143,12 @@ module Kemal::Cache
     end
 
     def clear_cache : Nil
-      @store.clear
+      @store.invalidate_all
       observe(EventType::Clear)
     end
 
     def try_clear_cache : Bool
-      @store.clear
+      @store.invalidate_all
       observe(EventType::Clear)
       true
     rescue error
